@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Revelado: un círculo de tono, mitad luz y mitad sombra, sobre el azul de marca -->
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2E7BFF"/>
+      <stop offset="1" stop-color="#1546B8"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" fill="url(#g)"/>
+  <circle cx="256" cy="256" r="150" fill="none" stroke="#fff" stroke-width="28"/>
+  <path d="M256 120a136 136 0 0 1 0 272z" fill="#fff"/>
+</svg>
