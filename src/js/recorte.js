@@ -1,39 +1,76 @@
-/* Recortar: proporciones, enderezar, girar 90° y voltear, con el rectángulo de recorte sobre la foto.
-   Mientras la pestaña está abierta se ve el marco completo; el recorte se aplica al salir de ella.
+/* Recortar y Geometría, en un mismo panel como en Lightroom.
+   Recortar: proporciones, enderezar (con Auto), girar 90° y voltear, con el rectángulo sobre la foto.
+   Geometría: Upright (Auto, Guiado, Nivel, Vertical, Completo), Restringir recorte y las transformaciones manuales.
+   Mientras el panel está abierto se ve el marco completo; el recorte se aplica al salir de él.
    El rectángulo vive en coordenadas 0..1 del marco orientado (tras giros y volteos). */
 
-const PROPORCIONES = [['libre', 'Libre'], ['original', 'Original'], ['1:1', '1:1'], ['4:5', '4:5'], ['5:4', '5:4'], ['2:3', '2:3'], ['3:2', '3:2'], ['9:16', '9:16'], ['16:9', '16:9']];
+const PROPORCIONES = [['libre', 'Libre'], ['original', 'Original'], ['1:1', '1:1'], ['4:5', '4:5'], ['5:4', '5:4'], ['8.5:11', '8,5:11'], ['5:7', '5:7'],
+  ['2:3', '2:3'], ['3:2', '3:2'], ['3:4', '3:4'], ['4:3', '4:3'], ['9:16', '9:16'], ['16:9', '16:9']];
+const UPRIGHT = [['', 'Apagado'], ['auto', 'Auto'], ['guiado', 'Guiado'], ['nivel', 'Nivel'], ['vertical', 'Vertical'], ['completo', 'Completo']];
+let vistaRecorte = 'recortar';
 
 function construirRecorte(){
-  const p = $('#p-recortar');
-  p.innerHTML = pcab('Recortar', '<button class="txt" data-reset-recorte>Restablecer</button>') +
-    '<div class="chips" id="proporciones">' + PROPORCIONES.map(([k, n]) => '<button data-asp="' + k + '">' + n + '</button>').join('') + '</div><div class="ctls"></div>' +
-    '<div class="chips" style="justify-content:center;gap:10px;padding-top:10px">' +
-    '<button data-girar>Girar 90°</button><button data-voltear="flipH">Voltear horizontal</button><button data-voltear="flipV">Voltear vertical</button></div>';
-  $('.ctls', p).appendChild(deslizador({ k:'angulo', nom:'Enderezar', min:-45, max:45, paso:.1, base:0 }, () => ED.a.geo.angulo,
-    (k, v, final) => { ED.a.geo.angulo = v; encajarRecorte(ED.a, ED.fuente.w, ED.fuente.h); cambiar(final); }));
-  p.addEventListener('click', e => {
+  $('#p-recortar').addEventListener('click', e => {
     const g = ED.a.geo, b = e.target.closest('button'); if (!b) return;
-    if (b.dataset.asp) { g.aspecto = b.dataset.asp; aplicarProporcion(); }
+    if (b.dataset.vistaRec) { vistaRecorte = b.dataset.vistaRec; ED.dibujandoGuias = false; pintarRecorte(); pedirPintura(); return; }
+    if (b.dataset.upright !== undefined) {
+      const m = b.dataset.upright;
+      if (!m) { Object.assign(ED.a, { upright:'', rotar:0, vertical:0, horizontal:0 }); cambiar(true); }
+      else if (m === 'guiado') { ED.a.upright = 'guiado'; toast('Dibuja sobre la foto 2 a 4 líneas que deban quedar rectas', 2600); }
+      else if (!aplicarUpright(m)) return toast('No encontré suficientes líneas rectas en esta foto. Prueba Guiado.', 2600);
+      else cambiar(true);
+      pintarRecorte(); pedirPintura(); return;
+    }
+    if (b.dataset.guiasBorrar !== undefined) { ED.a.guias = []; Object.assign(ED.a, { rotar:0, vertical:0, horizontal:0 }); cambiar(true); pintarRecorte(); return; }
+    if (b.dataset.restringirRec !== undefined) { ED.a.restringir = ED.a.restringir ? 0 : 1; cambiar(true); pintarRecorte(); return; }
+    if (b.dataset.resetGeo !== undefined) { CLAVES.geometria.forEach(k => { ED.a[k] = DEF[k]; }); ED.a.upright = ''; ED.a.guias = []; cambiar(true); pintarRecorte(); return; }
+    if (b.dataset.autoEnderezar !== undefined) { if (!enderezarAuto()) return toast('No encontré un horizonte o líneas rectas para nivelar'); }
+    else if (b.dataset.asp) { g.aspecto = b.dataset.asp; aplicarProporcion(); }
     else if (b.dataset.girar !== undefined) {
       /* gira 90° a la izquierda y lleva el recorte con la foto */
       g.rot = (g.rot + 3) % 4; Object.assign(g, { x:g.y, y:1 - g.x - g.w, w:g.h, h:g.w, flipH:g.flipV, flipV:g.flipH }); /* girar un volteo horizontal lo vuelve vertical */
-      const inv = { '4:5':'5:4', '5:4':'4:5', '2:3':'3:2', '3:2':'2:3', '9:16':'16:9', '16:9':'9:16' }[g.aspecto]; if (inv) g.aspecto = inv;
+      const [x, y] = g.aspecto.split(':'); if (y && x !== y) g.aspecto = y + ':' + x;
+      ED.a.guias = [];
     }
-    else if (b.dataset.voltear) { g[b.dataset.voltear] = !g[b.dataset.voltear]; if (b.dataset.voltear === 'flipH') g.x = 1 - g.x - g.w; else g.y = 1 - g.y - g.h; g.angulo = -g.angulo; }
+    else if (b.dataset.voltear) { g[b.dataset.voltear] = !g[b.dataset.voltear]; if (b.dataset.voltear === 'flipH') g.x = 1 - g.x - g.w; else g.y = 1 - g.y - g.h; g.angulo = -g.angulo; ED.a.guias = []; }
     else if (b.dataset.resetRecorte !== undefined) Object.assign(g, clonar(GEO_DEF));
     else return;
-    encajarRecorte(ED.a, ED.fuente.w, ED.fuente.h); cambiar(true); acomodar(); sincronizarRecorte();
+    encajarRecorte(ED.a, ED.fuente.w, ED.fuente.h); cambiar(true); acomodar(); pintarRecorte();
   });
 }
-function sincronizarRecorte(){ $$('#proporciones button').forEach(b => b.classList.toggle('activo', b.dataset.asp === ED.a.geo.aspecto)); }
+function pintarRecorte(){
+  const p = $('#p-recortar'), a = ED.a;
+  let h = '<div class="segmento" style="margin:4px 0 2px"><button data-vista-rec="recortar" aria-selected="' + (vistaRecorte === 'recortar') + '">Recortar</button>' +
+    '<button data-vista-rec="geometria" aria-selected="' + (vistaRecorte === 'geometria') + '">Geometría</button></div>';
+  if (vistaRecorte === 'recortar') {
+    h += pcab('Proporción', '<button class="txt" data-auto-enderezar>Auto</button><button class="txt" data-reset-recorte>Restablecer</button>') +
+      '<div class="chips" id="proporciones">' + PROPORCIONES.map(([k, n]) => '<button data-asp="' + k + '" class="' + (a.geo.aspecto === k ? 'activo' : '') + '">' + n + '</button>').join('') + '</div><div class="ctls"></div>' +
+      '<div class="chips" style="justify-content:center;gap:10px;padding-top:10px">' +
+      '<button data-girar>Girar 90°</button><button data-voltear="flipH">Voltear horizontal</button><button data-voltear="flipV">Voltear vertical</button></div>' +
+      '<p class="nota">Arrastra fuera del recuadro para enderezar a mano.</p>';
+  } else {
+    h += pcab('Upright', '<button class="txt" data-reset-geo>Restablecer</button>') +
+      '<div class="chips">' + UPRIGHT.map(([k, n]) => '<button data-upright="' + k + '" class="' + (a.upright === k ? 'activo' : '') + '">' + n + '</button>').join('') + '</div>' +
+      (a.upright === 'guiado' ? '<p class="nota">Dibuja de 2 a 4 líneas sobre bordes que deban quedar rectos (verticales u horizontales). ' + a.guias.length + ' de 4.' +
+        (a.guias.length ? ' <button class="txt" data-guias-borrar style="min-height:0;padding:0">Borrar guías</button>' : '') + '</p>' : '') +
+      '<div class="grupo"><label class="marca"><span>Restringir recorte</span><input type="checkbox" data-restringir-rec' + (a.restringir ? ' checked' : '') + '></label></div>' +
+      '<div class="sub">Transformación manual</div><div class="ctls"></div>';
+  }
+  p.innerHTML = h;
+  const c = $('.ctls', p);
+  if (vistaRecorte === 'recortar') c.appendChild(deslizador({ k:'angulo', nom:'Enderezar', min:-45, max:45, paso:.1, base:0 }, () => ED.a.geo.angulo,
+    (k, v, final) => { ED.a.geo.angulo = v; encajarRecorte(ED.a, ED.fuente.w, ED.fuente.h); cambiar(final); }));
+  else PANELES.geometria.forEach(d => c.appendChild(deslizador(d, k => ED.a[k], (k, v, f) => { ED.a[k] = v; if (f && ['rotar', 'vertical', 'horizontal'].includes(k)) ED.a.upright = ''; cambiar(f); })));
+  const chk = $('[data-restringir-rec]', p); if (chk) chk.onchange = () => { ED.a.restringir = chk.checked ? 1 : 0; cambiar(true); };
+}
+function sincronizarRecorte(){ if (ED.panel === 'recortar') $$('#proporciones button').forEach(b => b.classList.toggle('activo', b.dataset.asp === ED.a.geo.aspecto)); }
 
 /* Proporción buscada en píxeles (ancho / alto) o null si es libre */
 function razonRecorte(){
   const g = ED.a.geo, [Wo, Ho] = marcoOrientado(g, ED.fuente.w, ED.fuente.h);
   if (g.aspecto === 'libre') return null;
   if (g.aspecto === 'original') return Wo / Ho;
-  const [a, b] = g.aspecto.split(':').map(Number); return a / b;
+  const [a, b] = g.aspecto.split(':').map(parseFloat); return a / b;
 }
 /* El recorte más grande con la proporción elegida, centrado donde estaba */
 function aplicarProporcion(){

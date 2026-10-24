@@ -8,8 +8,9 @@ $('#filtros').addEventListener('click', e => {
   if (e.target.closest('[data-album-nuevo]')) return hojaNuevoAlbum();
   const b = e.target.closest('[data-filtro]'); if (b) { BIB.filtro = b.dataset.filtro; pintarBiblioteca(); }
 });
-$('#b-orden').addEventListener('click', hojaOrden);
-$('#b-album-mas').addEventListener('click', hojaOpcionesAlbum);
+$('#b-bib-mas').addEventListener('click', hojaOpcionesBib);
+$('#buscar').addEventListener('input', e => { BIB.busqueda = e.target.value; pintarBiblioteca(); });
+$('#presentacion').addEventListener('click', cerrarPresentacion);
 $('#b-seleccionar').addEventListener('click', () => { if (BIB.seleccionando) salirSeleccion(); else { BIB.seleccionando = true; pintarBiblioteca(); } });
 $('#rejilla').addEventListener('click', e => {
   const b = e.target.closest('[data-foto]'); if (!b) return;
@@ -27,6 +28,7 @@ $('#b-volver').addEventListener('click', volverBiblioteca);
 $('#b-deshacer').addEventListener('click', deshacer);
 $('#b-rehacer').addEventListener('click', rehacer);
 $('#b-mas').addEventListener('click', menuMas);
+$('#b-info').addEventListener('click', hojaInfo);
 $('#b-exportar').addEventListener('click', () => hojaExportar());
 $('#herramientas').addEventListener('click', e => { const b = e.target.closest('[data-p]'); if (b) elegirPanel(b.dataset.p); });
 document.addEventListener('keydown', e => {
@@ -56,7 +58,7 @@ document.addEventListener('visibilitychange', () => {
     return;
   }
   if (PORTAPAPELES && !PORTAPAPELES.grupos) PORTAPAPELES = null; /* copias de una versión anterior */
-  construirPaneles(); construirRecorte(); construirMascaras(); construirQuitar(); construirPresets();
+  construirPaneles(); construirRecorte(); construirMascaras(); construirQuitar(); construirPresets(); construirRapidas();
   try {
     await DB.abrir();
     BIB.fotos = await DB.todas(); BIB.albumes = (await DB.albumes()).sort((a, b) => a.fecha - b.fecha);

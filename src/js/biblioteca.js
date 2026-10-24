@@ -33,8 +33,10 @@ const DB = (() => {
 })();
 
 /* Estado de la biblioteca en memoria */
-const BIB = { fotos:[], albumes:[], filtro:'todas', orden:'captura', seleccionando:false, sel:new Set(), urls:new Map() };
-try { BIB.orden = localStorage.getItem('revelado.orden') || 'captura'; } catch (_) {}
+const BIB = { fotos:[], albumes:[], filtro:'todas', busqueda:'', seleccionando:false, sel:new Set(), urls:new Map(),
+  vista:{ orden:'captura', grupos:'mes', estilo:'cuadrada', info:'calificacion' } };
+try { Object.assign(BIB.vista, JSON.parse(localStorage.getItem('revelado.bib') || '{}')); } catch (_) {}
+const guardarVistaBib = () => { try { localStorage.setItem('revelado.bib', JSON.stringify(BIB.vista)); } catch (_) {} };
 let PORTAPAPELES = null; /* ajustes copiados (y qué grupos) para pegar en otras fotos */
 try { PORTAPAPELES = JSON.parse(localStorage.getItem('revelado.copiados') || 'null'); } catch (_) {}
 
@@ -54,8 +56,9 @@ async function miniatura(foto, imagen = null){
   const img = imagen || await decodificar(await DB.original(foto.id));
   const f = Motor.fuente(img, 480), [Wo, Ho] = marcoOrientado(foto.ajustes.geo, f.w, f.h);
   const g = foto.ajustes.geo, k = 480 / Math.max(g.w * Wo, g.h * Ho);
-  const px = Motor.revelar(f, foto.ajustes, { ancho:Math.max(1, Math.round(g.w * Wo * k)), alto:Math.max(1, Math.round(g.h * Ho * k)), destino:'pixeles' });
-  f.liberar();
+  const [W, H] = conBorde(foto.ajustes, Math.max(1, Math.round(g.w * Wo * k)), Math.max(1, Math.round(g.h * Ho * k)));
+  const px = Motor.revelar(f, foto.ajustes, { ancho:W, alto:H, destino:'pixeles' });
+  f.liberar(); foto.asp = W / H; /* proporción de la miniatura para la cuadrícula justificada */
   return aBlob(imagenACanvas(px), 'image/jpeg', .82);
 }
 
@@ -87,32 +90,53 @@ function urlMini(f){
   const url = f.mini ? URL.createObjectURL(f.mini) : ''; BIB.urls.set(f.id, { blob:f.mini, url }); return url;
 }
 const FILTROS = [['todas', 'Todas'], ['editadas', 'Editadas'], ['estrellas', 'Con estrellas'], ['elegidas', 'Elegidas'], ['rechazadas', 'Rechazadas']];
+const ORDENES = { captura:['tomada', 'Fecha de captura'], importacion:['fecha', 'Fecha de importación'], modificacion:['modificada', 'Fecha de modificación'], nombre:['nombre', 'Nombre'] };
 function fotosVisibles(){
-  const campo = BIB.orden === 'importacion' ? 'fecha' : 'tomada';
-  const ord = BIB.fotos.slice().sort((a, b) => (b[campo] || 0) - (a[campo] || 0));
-  const f = BIB.filtro;
-  if (f.startsWith('a:')) return ord.filter(x => (x.albumes || []).includes(f.slice(2)));
-  return ord.filter(x => f === 'editadas' ? x.editada : f === 'estrellas' ? x.estrellas > 0 : f === 'elegidas' ? x.marca === 'elegida' : f === 'rechazadas' ? x.marca === 'rechazada' : true);
+  const [campo] = ORDENES[BIB.vista.orden] || ORDENES.captura;
+  const ord = BIB.fotos.slice().sort(campo === 'nombre' ? (a, b) => a.nombre.localeCompare(b.nombre, 'es', { numeric:true }) : (a, b) => (b[campo] || b.fecha || 0) - (a[campo] || a.fecha || 0));
+  const f = BIB.filtro, q = BIB.busqueda.trim().toLowerCase();
+  let lista = f.startsWith('a:') ? ord.filter(x => (x.albumes || []).includes(f.slice(2)))
+    : ord.filter(x => f === 'editadas' ? x.editada : f === 'estrellas' ? x.estrellas > 0 : f === 'elegidas' ? x.marca === 'elegida' : f === 'rechazadas' ? x.marca === 'rechazada' : true);
+  if (q) lista = lista.filter(x => [x.nombre, x.exif && x.exif.camara, x.exif && x.exif.objetivo, ...BIB.albumes.filter(a => (x.albumes || []).includes(a.id)).map(a => a.nom)]
+    .filter(Boolean).some(t => t.toLowerCase().includes(q)));
+  return lista;
 }
 const ICO_BANDERA = '<svg viewBox="0 0 24 24"><path d="M5 21V4M5 4h11l-2 4 2 4H5"/></svg>';
-function pintarBiblioteca(){
-  const vis = fotosVisibles();
-  $('#rejilla').innerHTML = vis.map(f => '<button class="foto' + (BIB.sel.has(f.id) ? ' sel' : '') + (f.marca === 'rechazada' ? ' rechazada' : '') + '" data-foto="' + f.id + '" aria-label="' + esc(f.nombre) +
+/* Una miniatura con la información que se eligió mostrar encima */
+function tarjetaFoto(f){
+  const i = BIB.vista.info, d = f.exif || {}, asp = f.asp || f.w / f.h || 1;
+  const estilo = BIB.vista.estilo === 'justificada' ? ' style="flex:' + asp.toFixed(3) + ' 1 ' + Math.round(asp * 120) + 'px;aspect-ratio:' + asp.toFixed(3) + '"' : '';
+  return '<button class="foto' + (BIB.sel.has(f.id) ? ' sel' : '') + (f.marca === 'rechazada' ? ' rechazada' : '') + '" data-foto="' + f.id + '"' + estilo + ' aria-label="' + esc(f.nombre) +
     (f.estrellas ? ', ' + f.estrellas + ' estrellas' : '') + (f.editada ? ', editada' : '') + '">' +
     '<img src="' + urlMini(f) + '" alt="" loading="lazy">' +
-    (f.estrellas ? '<span class="estr">' + '★'.repeat(f.estrellas) + '</span>' : '') +
-    (f.marca === 'elegida' ? '<span class="band">' + ICO_BANDERA + '</span>' : '') +
-    (f.editada ? '<svg class="ed" viewBox="0 0 24 24">' + ICO.editada.slice(ICO.editada.indexOf('<path')) : '') + '<span class="chk"></span></button>').join('');
+    (i === 'calificacion' ? (f.estrellas ? '<span class="estr">' + '★'.repeat(f.estrellas) + '</span>' : '') + (f.marca === 'elegida' ? '<span class="band">' + ICO_BANDERA + '</span>' : '') +
+      (f.editada ? '<svg class="ed" viewBox="0 0 24 24">' + ICO.editada.slice(ICO.editada.indexOf('<path')) : '') : '') +
+    (i === 'datos' ? '<span class="datos">' + esc([d.camara || f.nombre, [d.iso, d.apertura, d.velocidad].filter(Boolean).join(' ')].filter(Boolean).join(' · ')) + '</span>' : '') +
+    '<span class="chk"></span></button>';
+}
+/* Agrupa por día o por mes cuando se ordena por fecha */
+function grupoDe(f){
+  const [campo] = ORDENES[BIB.vista.orden] || ORDENES.captura;
+  if (campo === 'nombre' || BIB.vista.grupos === 'ninguno') return '';
+  const t = new Date(f[campo] || f.fecha);
+  return BIB.vista.grupos === 'dia' ? t.toLocaleDateString('es-CO', { weekday:'long', day:'numeric', month:'long', year:'numeric' }) : t.toLocaleDateString('es-CO', { month:'long', year:'numeric' });
+}
+function pintarBiblioteca(){
+  const vis = fotosVisibles(), rej = $('#rejilla');
+  rej.className = BIB.vista.estilo === 'justificada' ? 'justificada' : '';
+  let h = '', actual = null, bloque = [];
+  const cerrar = () => { if (bloque.length) h += '<div class="bloque">' + bloque.join('') + '</div>'; bloque = []; };
+  vis.forEach(f => { const g = grupoDe(f); if (g !== actual) { cerrar(); if (g) h += '<h3 class="grupo-fecha">' + esc(g.charAt(0).toUpperCase() + g.slice(1)) + '</h3>'; actual = g; } bloque.push(tarjetaFoto(f)); });
+  cerrar(); rej.innerHTML = h;
   const vacia = !BIB.fotos.length;
-  $('#vacio').hidden = !vacia; $('#filtros').hidden = vacia; $('#b-seleccionar').hidden = vacia; $('#b-orden').hidden = vacia;
+  $('#vacio').hidden = !vacia; $('#filtros').hidden = vacia; $('#b-seleccionar').hidden = vacia; $('#b-bib-mas').hidden = vacia; $('#buscar-caja').hidden = vacia;
   $('#filtros').innerHTML = FILTROS.map(([k, n]) => '<button data-filtro="' + k + '" class="' + (BIB.filtro === k ? 'activo' : '') + '">' + n + '</button>').join('') +
     BIB.albumes.map(a => '<button data-filtro="a:' + a.id + '" class="' + (BIB.filtro === 'a:' + a.id ? 'activo' : '') + '">' + esc(a.nom) + '</button>').join('') +
     '<button data-album-nuevo aria-label="Nuevo álbum">+ Álbum</button>';
   const album = BIB.filtro.startsWith('a:') && BIB.albumes.find(a => 'a:' + a.id === BIB.filtro);
   $('#titulo-bib').textContent = album ? album.nom : 'Biblioteca';
-  $('#b-album-mas').hidden = !album;
-  if (!vacia && !vis.length) $('#rejilla').innerHTML = '<p class="ayuda" style="grid-column:1/-1;padding:40px 16px">' +
-    (album ? 'Este álbum está vacío. Usa Seleccionar en Todas y luego Álbum.' : BIB.filtro === 'editadas' ? 'Aún no has editado ninguna foto.' : 'No hay fotos con este filtro. Califícalas desde el editor (menú de más opciones) o con Seleccionar.') + '</p>';
+  if (!vacia && !vis.length) rej.innerHTML = '<p class="ayuda" style="padding:40px 16px">' +
+    (BIB.busqueda ? 'Nada coincide con «' + esc(BIB.busqueda) + '».' : album ? 'Este álbum está vacío. Usa Seleccionar en Todas y luego Álbum.' : BIB.filtro === 'editadas' ? 'Aún no has editado ninguna foto.' : 'No hay fotos con este filtro. Califícalas desde el editor o con Seleccionar.') + '</p>';
   $('#v-biblioteca').classList.toggle('seleccionando', BIB.seleccionando);
   $('#b-seleccionar').textContent = BIB.seleccionando ? 'Listo' : 'Seleccionar';
   $('#barra-sel').hidden = !BIB.seleccionando;
@@ -204,11 +228,46 @@ function hojaOpcionesAlbum(){
     }
   };
 }
-function hojaOrden(){
-  abrirHoja(cabHoja('Ordenar') + '<div class="grupo">' + [['captura', 'Fecha de captura'], ['importacion', 'Fecha de importación']].map(([k, n]) =>
-    '<button data-orden="' + k + '"><span>' + n + '</span>' + (BIB.orden === k ? '<span style="color:var(--brand)">✓</span>' : '') + '</button>').join('') + '</div>');
-  $('#hoja').onclick = e => { const b = e.target.closest('[data-orden]'); if (!b) return; BIB.orden = b.dataset.orden; try { localStorage.setItem('revelado.orden', BIB.orden); } catch (_) {} cerrarHoja(); pintarBiblioteca(); };
+/* Opciones de la biblioteca: ordenar, agrupar, estilo de cuadrícula, información sobre miniaturas, presentación y álbum */
+function hojaOpcionesBib(){
+  const V = BIB.vista, sel = (k, v) => V[k] === v ? '<span style="color:var(--brand)">✓</span>' : '';
+  const album = BIB.filtro.startsWith('a:');
+  abrirHoja(cabHoja('Opciones') +
+    '<div class="sub">Ordenar por</div><div class="grupo">' + Object.entries(ORDENES).map(([k, [, n]]) => '<button data-ob="orden:' + k + '"><span>' + n + '</span>' + sel('orden', k) + '</button>').join('') + '</div>' +
+    '<div class="sub">Agrupar</div><div class="segmento" style="margin:6px 0 14px">' + [['ninguno', 'Sin grupos'], ['dia', 'Por día'], ['mes', 'Por mes']].map(([k, n]) => '<button data-ob="grupos:' + k + '" aria-selected="' + (V.grupos === k) + '">' + n + '</button>').join('') + '</div>' +
+    '<div class="sub">Cuadrícula</div><div class="segmento" style="margin:6px 0 14px">' + [['cuadrada', 'Cuadrada'], ['justificada', 'Justificada']].map(([k, n]) => '<button data-ob="estilo:' + k + '" aria-selected="' + (V.estilo === k) + '">' + n + '</button>').join('') + '</div>' +
+    '<div class="sub">Información en las miniaturas</div><div class="segmento" style="margin:6px 0 14px">' + [['ninguna', 'Ninguna'], ['calificacion', 'Calificación'], ['datos', 'Datos']].map(([k, n]) => '<button data-ob="info:' + k + '" aria-selected="' + (V.info === k) + '">' + n + '</button>').join('') + '</div>' +
+    '<div class="grupo"><button data-ob-pres><span>Iniciar presentación</span></button>' + (album ? '<button data-ob-album><span>Opciones del álbum</span>' + ICO.chev + '</button>' : '') + '</div>');
+  $('#hoja').onclick = e => {
+    const b = e.target.closest('[data-ob]');
+    if (b) { const [k, v] = b.dataset.ob.split(':'); V[k] = v; guardarVistaBib(); pintarBiblioteca(); return hojaOpcionesBib(); }
+    if (e.target.closest('[data-ob-pres]')) { cerrarHoja(); iniciarPresentacion(); }
+    if (e.target.closest('[data-ob-album]')) hojaOpcionesAlbum();
+  };
 }
+
+/* Presentación: las fotos visibles, reveladas a tamaño de pantalla, una cada 3 segundos. Tocar la cierra. */
+let presentando = null;
+async function iniciarPresentacion(){
+  const lista = fotosVisibles(); if (!lista.length) return;
+  const el = $('#presentacion'), img = $('#pres-img'); el.hidden = false; presentando = { i:0 };
+  const yo = presentando, lado = Math.round(Math.max(innerWidth, innerHeight) * Math.min(2, devicePixelRatio || 1));
+  try { document.documentElement.requestFullscreen && await document.documentElement.requestFullscreen(); } catch (_) {}
+  while (presentando === yo) {
+    const f = lista[yo.i % lista.length];
+    try {
+      const im = await decodificar(await DB.original(f.id)), a = completarAjustes(f.ajustes), fu = Motor.fuente(im, lado);
+      const g = a.geo, [Wo, Ho] = marcoOrientado(g, fu.w, fu.h), [W, H] = conBorde(a, Math.round(g.w * Wo), Math.round(g.h * Ho));
+      const px = Motor.revelar(fu, a, { ancho:W, alto:H, destino:'pixeles' }); fu.liberar(); if (im.close) im.close();
+      const blob = await aBlob(imagenACanvas(px), 'image/jpeg', .9), url = URL.createObjectURL(blob);
+      if (presentando !== yo) { URL.revokeObjectURL(url); break; }
+      const viejo = img.src; img.src = url; $('#pres-pie').textContent = (yo.i % lista.length + 1) + ' de ' + lista.length;
+      if (viejo.startsWith('blob:')) setTimeout(() => URL.revokeObjectURL(viejo), 1000);
+    } catch (_) {}
+    yo.i++; await esperar(3000);
+  }
+}
+function cerrarPresentacion(){ presentando = null; $('#presentacion').hidden = true; try { if (document.fullscreenElement) document.exitFullscreen(); } catch (_) {} }
 
 /* ---------- foto de ejemplo: atardecer sobre montañas y un lago, dibujado en el momento ---------- */
 async function fotoEjemplo(){

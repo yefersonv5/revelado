@@ -38,8 +38,10 @@ uniform vec4 uA1, uA2, uA3, uA4, uA5, uA6, uVin, uOpt, uOpt2, uDes, uDes2;
 uniform vec3 uMez[8];
 uniform vec4 uGrad[4];
 uniform vec2 uGradMB;
-uniform int uNM, uVerM, uNS;
-uniform vec4 uMG[24], uMA[32];
+uniform int uNM, uVerM, uNS, uNC, uNP;
+uniform vec4 uCG[36], uMA[32], uMP[8], uPC[16], uBorde, uVerCol;
+uniform vec3 uBordeCol;
+uniform float uVerModo;
 
 const float TONOS[8] = float[8](0., 30., 58., 120., 180., 225., 275., 320.);
 
@@ -110,12 +112,15 @@ vec3 local(vec3 c, float w, vec4 a0, vec4 a1, vec4 a2, vec4 a3, vec3 det, vec3 s
 }
 
 void main(){
+  /* borde: la foto ocupa el centro y el resto es el color del borde */
+  vec2 sal = uSal * (1. - 2. * uBorde.xy), vo = (vUV - uBorde.xy) / (1. - 2. * uBorde.xy);
+  if (vo.x < 0. || vo.y < 0. || vo.x > 1. || vo.y > 1.) { o = vec4(uBordeCol, 1.); return; }
   /* geometría: de la salida al marco orientado, transformación y de ahí a la foto */
-  vec2 po = (uGeo1 * vec3(vUV, 1.)).xy;
+  vec2 po = (uGeo1 * vec3(vo, 1.)).xy;
   vec2 uv = (uGeo2 * vec3(deformar(po), 1.)).xy;
   if (uv.x < 0. || uv.y < 0. || uv.x > 1. || uv.y > 1.) { o = vec4(vec3(.11), 1.); return; }
   vec3 c = texture(uSrc, uv).rgb;
-  if (uAntes > .5 || (uDiv >= 0. && vUV.x < uDiv)) { o = vec4(c, 1.); return; }
+  if (uAntes > .5 || (uDiv >= 0. && vo.x < uDiv)) { o = vec4(c, 1.); return; }
   vec3 s = texture(uS, uv).rgb, m = texture(uM, uv).rgb, l = texture(uL, uv).rgb, h = texture(uH, uv).rgb;
 
   /* aberración cromática: el rojo y el azul se corrigen en escala radial */
@@ -196,6 +201,15 @@ void main(){
       hsv.y = clamp(hsv.y * (1. + acc.y * sw), 0., 1.);
       c = hsv2rgb(hsv) * (1. + acc.z * .5 * sw * min(1., hsv.y * 1.5));
     }
+    /* color puntual: cada punto mueve tono, saturación y luminancia de los colores parecidos al muestreado */
+    for (int i = 0; i < 8; i++) {
+      if (i >= uNP) break;
+      vec4 p0 = uPC[i * 2], p1 = uPC[i * 2 + 1]; vec3 hp = rgb2hsv(p0.rgb), hc = rgb2hsv(c);
+      float dh = abs(hc.x - hp.x); dh = min(dh, 1. - dh);
+      float d = dh * 2.4 + abs(hc.y - hp.y) * .6 + abs(hc.z - hp.z) * .35, R = .06 + p0.w * .4;
+      float w = (1. - smoothstep(R * .45, R, d)) * smoothstep(.02, .12, hc.y);
+      if (w > 0.) { hc.x = fract(hc.x + p1.x * w * 40. / 360.); hc.y = clamp(hc.y * (1. + p1.y * w), 0., 1.); c = hsv2rgb(hc) * (1. + p1.z * w * .6); }
+    }
     /* intensidad (protege lo ya saturado) y saturación */
     float Ls = lum(c), sat = max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b));
     c = vec3(Ls) + (c - vec3(Ls)) * max(0., 1. + uA3.y + uA3.x * (1. - min(1., sat * 1.4)));
@@ -207,11 +221,13 @@ void main(){
   c += uGrad[0].rgb * wS + uGrad[1].rgb * wM + uGrad[2].rgb * wH + uGrad[3].rgb;
   c += (uGrad[0].w * wS + uGrad[1].w * wM + uGrad[2].w * wH + uGrad[3].w) * .25;
 
-  /* máscaras: 0 lineal, 1 radial, 2 pincel, 3 rango de luminancia, 4 rango de color */
-  vec2 q = uv * uAsp; float ver = 0.;
-  for (int i = 0; i < 8; i++) {
-    if (i >= uNM) break;
-    vec4 g0 = uMG[i * 3], g1 = uMG[i * 3 + 1], g2 = uMG[i * 3 + 2];
+  /* máscaras: cada componente (0 lineal, 1 radial, 2 pincel, 3 rango de luminancia, 4 rango de color) agrega o
+     resta zona a su máscara; después cada máscara aplica sus ajustes con su cantidad */
+  vec2 q = uv * uAsp; float gw[8];
+  for (int g = 0; g < 8; g++) gw[g] = -1.;
+  for (int i = 0; i < 12; i++) {
+    if (i >= uNC) break;
+    vec4 g0 = uCG[i * 3], g1 = uCG[i * 3 + 1], g2 = uCG[i * 3 + 2];
     float w, t = g0.x;
     if (t < .5) {
       vec2 A = g1.xy * uAsp, d = g1.zw * uAsp - A;
@@ -231,25 +247,37 @@ void main(){
       float d = length(a - b) * 2. + abs(lum(c0) - lum(g2.rgb)) * .5;
       w = 1. - smoothstep(g1.x * .5, g1.x, d);
     }
-    if (g0.y > .5) w = 1. - w;
-    w *= g0.z;
-    if (i == uVerM) ver = w;
-    if (w > 0.) c = local(c, w, uMA[i * 4], uMA[i * 4 + 1], uMA[i * 4 + 2], uMA[i * 4 + 3], det, s, m, h);
+    if (g0.z > .5) w = 1. - w;
+    int gi = int(g2.w + .5);
+    gw[gi] = g0.y < .5 ? (gw[gi] < 0. ? w : max(gw[gi], w)) : max(gw[gi], 0.) * (1. - w);
   }
-  if (uVerM >= 0) c = mix(c, vec3(1., .18, .22), ver * .45);
+  float ver = 0.;
+  for (int g = 0; g < 8; g++) {
+    if (g >= uNM) break;
+    float w = max(gw[g], 0.); vec4 mp = uMP[g];
+    if (mp.x > .5) w = 1. - w;
+    w *= mp.y;
+    if (g == uVerM) ver = w;
+    if (w > 0.) c = local(c, w, uMA[g * 4], uMA[g * 4 + 1], uMA[g * 4 + 2], uMA[g * 4 + 3], det, s, m, h);
+  }
+  /* vista de la máscara: color encima, imagen sobre negro, blanco sobre negro o imagen sobre blanco */
+  if (uVerM >= 0) {
+    if (uVerModo < .5) c = mix(c, uVerCol.rgb, ver * uVerCol.w);
+    else { c = uVerModo < 1.5 ? c * ver : uVerModo < 2.5 ? vec3(ver) : mix(vec3(1.), c, ver); o = vec4(clamp(c, 0., 1.), 1.); return; }
+  }
 
   /* viñeta tras el recorte, con prioridad de altas luces */
   if (uVin.x != 0.) {
-    float kr = (uVin.z + 1.) * .5, asp = mix(1., uSal.x / uSal.y, kr);
-    float d = length((vUV - .5) * vec2(asp, 1.)) / length(vec2(asp, 1.) * .5);
+    float kr = (uVin.z + 1.) * .5, asp = mix(1., sal.x / sal.y, kr);
+    float d = length((vo - .5) * vec2(asp, 1.)) / length(vec2(asp, 1.) * .5);
     float m0 = mix(.2, .9, uVin.y), f = mix(.05, .8, uVin.w);
     float vv = smoothstep(m0 - f * .5, m0 + f * .5, d);
     c = uVin.x < 0. ? c * (1. + uVin.x * vv * .95 * (1. - uA6.w * smoothstep(.55, 1., lum(c)))) : mix(c, vec3(1.), uVin.x * vv * .85);
   }
   /* grano: igual en vista previa y exportación porque se mide sobre el tamaño de salida */
   if (uA5.y > 0.) {
-    float cel = (1. + uA5.z * 3.) * max(uSal.x, uSal.y) / 2048.;
-    vec2 g = vUV * uSal / cel;
+    float cel = (1. + uA5.z * 3.) * max(sal.x, sal.y) / 2048.;
+    vec2 g = vo * sal / cel;
     float n = mix(ruidoValor(g), hash(floor(g * 2.) + uSemilla), uA5.w * .6) - .5, Ln = lum(c);
     c += n * uA5.y * .22 * (.35 + 2.6 * Ln * (1. - Ln));
   }
@@ -395,9 +423,8 @@ const Motor = (() => {
     return out;
   }
 
-  /* Máscaras de pincel: hasta 4, cada una en un canal (R, G, B, A) de una sola textura en el espacio de la foto */
-  function actualizarPincel(mascaras, asp){
-    const pinceles = mascaras.filter(m => m.tipo === 'pincel').slice(0, 4);
+  /* Componentes de pincel: hasta 4, cada uno en un canal (R, G, B, A) de una sola textura en el espacio de la foto */
+  function actualizarPincel(pinceles, asp){
     const clave = JSON.stringify([asp, pinceles.map(m => m.trazos)]);
     if (clave === pincelClave) return; pincelClave = clave;
     const W = Math.max(1, Math.round(1024 * asp[0])), H = Math.max(1, Math.round(1024 * asp[1]));
@@ -468,7 +495,8 @@ const Motor = (() => {
       const clave = JSON.stringify([a.curva, e.curvaPerfil]);
       if (clave !== lutClave) { gl.bindTexture(gl.TEXTURE_2D, lutTex); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 256, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, curvaLUT(a.curva, e.curvaPerfil)); lutClave = clave; }
       const L = Math.max(f.w, f.h), asp = [f.w / L, f.h / L];
-      actualizarPincel(a.mascaras.slice(0, 8), asp); actualizarManchas(a.manchas);
+      const comps = componentesMascaras(a.mascaras);
+      actualizarPincel(comps.filter(x => x.c.tipo === 'pincel').slice(0, 4).map(x => x.c), asp); actualizarManchas(a.manchas);
       let fb = null, tex = null;
       if (op.destino === 'pixeles') { tex = textura(W, H); fb = destino(tex); }
       else { if (lienzo.width !== W || lienzo.height !== H) { lienzo.width = W; lienzo.height = H; } gl.bindFramebuffer(gl.FRAMEBUFFER, null); }
@@ -501,23 +529,35 @@ const Motor = (() => {
         return [(r - l) * s, (g - l) * s, (b - l) * s, c('g_' + z.k + '_l')];
       }));
       u('uGradMB', c('g_mezcla'), c('g_balance'));
-      const ms = a.mascaras.slice(0, 8), mg = new Float32Array(96), ma = new Float32Array(128);
+      /* máscaras: componentes (forma y si agrega o resta) y, por máscara, invertir, cantidad y sus 16 ajustes */
+      const ms = a.mascaras.slice(0, 8), cg = new Float32Array(144), ma = new Float32Array(128), mp = new Float32Array(32);
       let canal = 0;
-      ms.forEach((m, i) => {
-        const base = [0, m.invertir ? 1 : 0, m.cant / 100, 0];
-        let g1 = [0, 0, 0, 0], g2 = [0, 0, 0, 0];
+      comps.forEach(({ c:m, g, resta, inv }, i) => {
+        const base = [0, resta ? 1 : 0, inv ? 1 : 0, 0];
+        let g1 = [0, 0, 0, 0], g2 = [0, 0, 0, g];
         if (m.tipo === 'lineal') g1 = [m.x0, m.y0, m.x1, m.y1];
-        if (m.tipo === 'radial') { base[0] = 1; base[3] = m.ang; g1 = [m.cx, m.cy, m.rx, m.ry]; g2 = [m.desv / 100, 0, 0, 0]; }
+        if (m.tipo === 'radial') { base[0] = 1; base[3] = m.ang; g1 = [m.cx, m.cy, m.rx, m.ry]; g2[0] = m.desv / 100; }
         if (m.tipo === 'pincel') { base[0] = 2; base[3] = canal++; }
-        if (m.tipo === 'luminancia') { base[0] = 3; g2 = [m.desde / 100, m.hasta / 100, m.suav / 100 * .5, 0]; }
-        if (m.tipo === 'color') { base[0] = 4; g1 = [.05 + m.tol / 100 * .6, 0, 0, 0]; g2 = m.col ? [...m.col, 0] : [0, 0, 0, 0]; if (!m.col) base[2] = 0; }
-        mg.set([...base, ...g1, ...g2], i * 12);
+        if (m.tipo === 'luminancia') { base[0] = 3; g2 = [m.desde / 100, m.hasta / 100, m.suav / 100 * .5, g]; }
+        if (m.tipo === 'color') { base[0] = 4; g1 = [.05 + m.tol / 100 * .6, 0, 0, 0]; g2 = m.col ? [...m.col, g] : [9, 9, 9, g]; }
+        cg.set([...base, ...g1, ...g2], i * 12);
+      });
+      ms.forEach((m, i) => {
+        mp.set([m.invertir ? 1 : 0, m.oculta ? 0 : m.cant / 100, 0, 0], i * 4);
         const x = m.a;
         ma.set([x.temperatura / 100, x.matiz / 100, x.exposicion, x.contraste / 100, x.altas / 100, x.sombras / 100, x.blancos / 100, x.negros / 100,
           x.saturacion / 100, x.textura / 100, x.claridad / 100, x.neblina / 100, x.nitidez / 100, x.ruido / 100, x.color_h / 360, x.color_s / 100], i * 16);
       });
-      gl.uniform4fv(ubic(progR, 'uMG'), mg); gl.uniform4fv(ubic(progR, 'uMA'), ma);
-      gl.uniform1i(ubic(progR, 'uNM'), ms.length); gl.uniform1i(ubic(progR, 'uVerM'), op.verMascara ?? -1);
+      gl.uniform4fv(ubic(progR, 'uCG'), cg); gl.uniform4fv(ubic(progR, 'uMA'), ma); gl.uniform4fv(ubic(progR, 'uMP'), mp);
+      gl.uniform1i(ubic(progR, 'uNM'), ms.length); gl.uniform1i(ubic(progR, 'uNC'), comps.length); gl.uniform1i(ubic(progR, 'uVerM'), op.verMascara ?? -1);
+      const vm = op.vistaMascara || VISTA_MASCARA; u('uVerModo', vm.modo); u('uVerCol', ...hexRgb(vm.color), vm.opac / 100);
+      /* color puntual */
+      const pc = new Float32Array(64);
+      a.puntos.slice(0, 8).forEach((p, i) => pc.set([...p.col, p.rango / 100, p.h / 100, p.s / 100, p.l / 100, 0], i * 8));
+      gl.uniform4fv(ubic(progR, 'uPC'), pc); gl.uniform1i(ubic(progR, 'uNP'), Math.min(8, a.puntos.length));
+      /* borde: grosor relativo al lado mayor de la foto recortada, fuera del modo recorte */
+      const t = op.recorte ? 0 : a.borde.tam / 100 * .12, b = t * Math.max(W, H) / (1 + 2 * t);
+      u('uBorde', b / W, b / H, 0, 0); u('uBordeCol', ...hexRgb(a.borde.color));
       gl.uniform1i(ubic(progR, 'uNS'), Math.min(64, a.manchas.length));
       dibujar();
       if (!fb) return null;
@@ -534,3 +574,24 @@ function hsvRgb(h){
   const f = n => { const k = (n + h * 6) % 6; return 1 - Math.max(0, Math.min(k, 4 - k, 1)); };
   return [f(5), f(3), f(1)];
 }
+const hexRgb = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16) / 255);
+/* Cómo se muestra la máscara elegida: 0 color encima, 1 imagen sobre negro, 2 blanco sobre negro, 3 imagen sobre blanco */
+const VISTA_MASCARA = { modo:0, color:'#FF2D3A', opac:45, siempre:false };
+try { Object.assign(VISTA_MASCARA, JSON.parse(localStorage.getItem('revelado.vistaMascara') || '{}')); } catch (_) {}
+
+/* Lista plana de componentes de todas las máscaras: la forma principal (agrega) y las extra (agregan o restan).
+   g es el número de máscara; inv invierte solo ese componente. Máximo 12 en total. */
+function componentesMascaras(mascaras){
+  const out = [];
+  mascaras.slice(0, 8).forEach((m, g) => {
+    out.push({ c:m, g, resta:false, inv:false });
+    (m.extra || []).forEach(x => out.push({ c:x, g, resta:x.modo === 'restar', inv:!!x.invertir }));
+  });
+  return out.slice(0, 12);
+}
+/* Tamaño final con borde a partir del tamaño del recorte */
+function conBorde(a, W, H){
+  const t = a.borde.tam / 100 * .12, b = Math.round(t * Math.max(W, H));
+  return [W + 2 * b, H + 2 * b];
+}
+

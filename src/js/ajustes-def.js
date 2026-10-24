@@ -44,7 +44,10 @@ const PERFIL_DEF = { id:'color', cant:100 };
 const DESENFOQUE_DEF = { cant:0, cx:.5, cy:.5, rx:.18, ry:.24, ang:0, desv:60, tipo:'radial' };
 
 /* Ajuste completo sin cambios */
-const ajustesBase = () => Object.assign(clonar(DEF), { perfil:clonar(PERFIL_DEF), curva:clonar(CURVA_DEF), geo:clonar(GEO_DEF), mascaras:[], manchas:[], desenfoque:clonar(DESENFOQUE_DEF) });
+const BORDE_DEF = { tam:0, color:'#FFFFFF' };
+/* puntos: Color puntual (hasta 8 colores muestreados). guias: líneas de Upright guiado en el marco orientado. upright: modo elegido */
+const ajustesBase = () => Object.assign(clonar(DEF), { perfil:clonar(PERFIL_DEF), curva:clonar(CURVA_DEF), geo:clonar(GEO_DEF), mascaras:[], manchas:[],
+  desenfoque:clonar(DESENFOQUE_DEF), puntos:[], borde:clonar(BORDE_DEF), guias:[], upright:'' });
 
 /* Completa un ajuste guardado con lo que le falte (por si la app agrega ajustes nuevos) */
 function completarAjustes(a){
@@ -57,7 +60,11 @@ function completarAjustes(a){
   if (a.desenfoque) Object.assign(b.desenfoque, a.desenfoque);
   if (Array.isArray(a.manchas)) b.manchas = a.manchas;
   b.bbAuto = !!a.bbAuto;
-  if (Array.isArray(a.mascaras)) b.mascaras = a.mascaras.map(m => { const base = mascaraBase(m.tipo); return Object.assign(base, m, { a:Object.assign(base.a, m.a || {}) }); });
+  if (Array.isArray(a.puntos)) b.puntos = a.puntos.map(p => Object.assign({ h:0, s:0, l:0, rango:50 }, p));
+  if (a.borde) Object.assign(b.borde, a.borde);
+  if (Array.isArray(a.guias)) b.guias = a.guias;
+  b.upright = a.upright || '';
+  if (Array.isArray(a.mascaras)) b.mascaras = a.mascaras.map(m => { const base = mascaraBase(m.tipo); return Object.assign(base, m, { a:Object.assign(base.a, m.a || {}), extra:(m.extra || []).map(c => Object.assign(mascaraBase(c.tipo), c, { a:undefined })) }); });
   return b;
 }
 
@@ -67,7 +74,7 @@ const cambiado = (a, claves) => claves.some(k => a[k] !== DEF[k]);
 const geoEditada = g => g.rot || g.flipH || g.flipV || g.angulo || g.x || g.y || g.w !== 1 || g.h !== 1;
 
 /* ¿La foto tiene algún cambio? Sirve para la marca de "editada" en la biblioteca */
-const ajustesEditados = a => cambiado(a, Object.keys(DEF)) || a.perfil.id !== 'color' || curvaEditada(a.curva) || geoEditada(a.geo) ||
+const ajustesEditados = a => cambiado(a, Object.keys(DEF)) || a.perfil.id !== 'color' || curvaEditada(a.curva) || geoEditada(a.geo) || a.puntos.length > 0 || a.borde.tam > 0 ||
   a.mascaras.length > 0 || a.manchas.length > 0 || a.desenfoque.cant > 0;
 
 /* ---------- perfiles ----------
@@ -168,6 +175,9 @@ function aplicarGrupos(destino, origen, grupos){
     if (g === 'perfil') a.perfil = o.perfil;
     if (g === 'curva') a.curva = o.curva;
     if (g === 'mascaras') a.mascaras = o.mascaras;
+    if (g === 'color') { a.puntos = o.puntos; a.bbAuto = o.bbAuto; }
+    if (g === 'efectos') a.borde = o.borde;
+    if (g === 'geometria') { a.upright = o.upright; a.guias = o.guias; }
     if (g === 'desenfoque') a.desenfoque = o.desenfoque;
     if (g === 'manchas') a.manchas = o.manchas;
     if (g === 'recorte') a.geo = o.geo;
@@ -193,7 +203,8 @@ function mascaraBase(tipo){
   /* coordenadas en la foto original (0 a 1). Lineal: de p0 (efecto completo) a p1 (sin efecto).
      Radial: centro, radios como fracción del lado mayor, ángulo y desvanecido.
      Pincel: trazos con radio en fracción del lado mayor. Rangos: valores de 0 a 1. */
-  const m = { id:uid(), tipo, invertir:false, cant:100, a };
+  /* una máscara es su forma principal más componentes extra que agregan o restan zona (extra), como en Lightroom */
+  const m = { id:uid(), tipo, invertir:false, cant:100, nombre:'', oculta:false, extra:[], modo:'agregar', a };
   if (tipo === 'radial') Object.assign(m, { cx:.5, cy:.5, rx:.22, ry:.16, ang:0, desv:50 });
   else if (tipo === 'pincel') Object.assign(m, { trazos:[] });
   else if (tipo === 'color') Object.assign(m, { col:null, tol:30 });

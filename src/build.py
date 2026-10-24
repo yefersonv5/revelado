@@ -20,10 +20,12 @@ ORDEN = [
     'biblioteca.js',         # fotos en el dispositivo (IndexedDB) y vista de biblioteca
     'deslizador.js',         # deslizador táctil al estilo Lightroom
     'paneles.js',            # paneles de Luz, Color, Efectos, Detalle, Óptica y Geometría
-    'recorte.js',            # recortar, enderezar, girar y voltear
+    'recorte.js',            # recortar y geometría
+    'upright.js',            # detección de líneas y Upright
     'mascaras.js',           # máscaras y desenfoque de lente
     'quitar.js',             # herramienta Quitar (pincel corrector)
     'presets.js',            # presets incluidos y propios
+    'rapidas.js',            # acciones rápidas
     'editor.js',             # editor: vista, historial y gestos
     'exportar.js',           # exportar y compartir
     'eventos.js',            # navegación y arranque: siempre al final

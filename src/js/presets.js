@@ -15,7 +15,7 @@ let turnoMinis = 0;
 async function pintarMinis(lienzos, ajustesDe){
   const turno = ++turnoMinis, f = ED.fuenteMini; if (!f) return;
   const g = ED.a.geo, [Wo, Ho] = marcoOrientado(g, f.w, f.h), k = 160 / Math.max(g.w * Wo, g.h * Ho);
-  const W = Math.max(1, Math.round(g.w * Wo * k)), H = Math.max(1, Math.round(g.h * Ho * k));
+  const [W, H] = conBorde(ED.a, Math.max(1, Math.round(g.w * Wo * k)), Math.max(1, Math.round(g.h * Ho * k)));
   for (const c of lienzos) {
     if (turno !== turnoMinis || !ED.foto) return;
     const a = ajustesDe(c); if (!a) continue;

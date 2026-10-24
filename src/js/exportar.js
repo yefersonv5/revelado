@@ -50,7 +50,7 @@ async function revelarParaExportar(foto, img, ajustes, n){
   try {
     const g = ajustes.geo, [Wo, Ho] = marcoOrientado(g, f.w, f.h), lado = EXP.tam === 'max' ? Infinity : +EXP.tam;
     const k = Math.min(1, lado / Math.max(g.w * Wo, g.h * Ho));
-    const W = Math.max(1, Math.round(g.w * Wo * k)), H = Math.max(1, Math.round(g.h * Ho * k));
+    const [W, H] = conBorde(ajustes, Math.max(1, Math.round(g.w * Wo * k)), Math.max(1, Math.round(g.h * Ho * k)));
     const c = imagenACanvas(Motor.revelar(f, ajustes, { ancho:W, alto:H, destino:'pixeles' }));
     if (EXP.marca.activa && EXP.marca.texto.trim()) dibujarMarca(c);
     const tipo = EXP.formato === 'png' ? 'image/png' : 'image/jpeg';

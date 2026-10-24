@@ -11,7 +11,7 @@ const ED = {
   foto:null, a:ajustesBase(), img:null, fuente:null, fuenteMini:null, srcPx:null, inicial:null,
   panel:'presets', hist:[], hi:0, sucio:false, preset:null, autoPrevio:null,
   antes:false, zoom:1, px:0, py:0, vista:{ x:0, y:0, w:1, h:1 }, res:{ w:1, h:1 },
-  mascara:-1, verMascara:false, mancha:-1, modoToque:null, cursor:null,
+  mascara:-1, comp:0, verMascara:false, mancha:-1, modoToque:null, cursor:null,
   division:null, avisos:false, avisosTemp:false, info:0,
 };
 const RECORTE_TODO = { x:0, y:0, w:1, h:1 };
@@ -30,7 +30,7 @@ async function abrirEditor(id){
   } catch (e) { console.error(e); toast('No se pudo abrir la foto'); return volverBiblioteca(); }
   foto.versiones = foto.versiones || [];
   ED.a = completarAjustes(foto.ajustes); ED.inicial = JSON.stringify(ED.a); ED.hist = [ED.inicial]; ED.hi = 0; ED.sucio = false;
-  Object.assign(ED, { preset:null, autoPrevio:null, mascara:-1, verMascara:false, mancha:-1, modoToque:null, antes:false, zoom:1, px:0, py:0, srcPx:null, division:null });
+  Object.assign(ED, { preset:null, autoPrevio:null, mascara:-1, comp:0, verMascara:VISTA_MASCARA.siempre, mancha:-1, modoToque:null, antes:false, zoom:1, px:0, py:0, srcPx:null, division:null });
   $$('.pane').forEach(p => { if (p.dataset.abierta) cerrarSub(p); });
   botonesHistorial(); refrescarTodo(true); pintarPresets(); mostrarInfo();
 }
@@ -41,6 +41,7 @@ async function soltarFoto(){
   clearTimeout(guardadoT);
   if (ED.sucio) {
     f.ajustes = clonar(ED.a); f.editada = ajustesEditados(f.ajustes);
+    try { localStorage.setItem('revelado.anteriores', JSON.stringify(f.ajustes)); } catch (_) {} /* para "Aplicar ajustes anteriores" */
     try { f.mini = await miniatura(f, ED.img); } catch (_) {}
     await DB.guardar(f);
   }
@@ -70,7 +71,7 @@ function cambiar(final, dePreset = false){
 }
 function programarGuardado(){
   ED.sucio = true; clearTimeout(guardadoT);
-  guardadoT = setTimeout(() => { if (!ED.foto) return; ED.foto.ajustes = clonar(ED.a); ED.foto.editada = ajustesEditados(ED.a); DB.guardar(ED.foto); }, 500);
+  guardadoT = setTimeout(() => { if (!ED.foto) return; ED.foto.modificada = Date.now(); ED.foto.ajustes = clonar(ED.a); ED.foto.editada = ajustesEditados(ED.a); DB.guardar(ED.foto); }, 500);
 }
 function botonesHistorial(){ $('#b-deshacer').disabled = ED.hi <= 0; $('#b-rehacer').disabled = ED.hi >= ED.hist.length - 1; }
 function restaurar(s){
@@ -101,6 +102,8 @@ function pintarPanelActual(){
   if (p === 'quitar') pintarQuitar();
   if (p === 'desenfoque') pintarDesenfoque();
   if (p === 'versiones') pintarVersiones();
+  if (p === 'recortar') pintarRecorte();
+  if (p === 'rapidas') pintarRapidas();
   $$('#herramientas [data-p="auto"]').forEach(b => b.classList.toggle('activo', !!ED.autoPrevio));
 }
 function elegirPanel(p){
@@ -110,6 +113,7 @@ function elegirPanel(p){
   $$('#herramientas button').forEach(b => b.setAttribute('aria-selected', b.dataset.p === p));
   $$('.pane').forEach(el => { el.hidden = el.id !== 'p-' + p; });
   pintarPanelActual();
+  if (ED.modoToque === 'dirigido' || ED.modoToque === 'puntual') ED.modoToque = null;
   if (p === 'recortar' || salia === 'recortar') { ED.zoom = 1; ED.px = ED.py = 0; acomodar(); }
   aplicarTransformacion(); pedirPintura();
 }
@@ -120,26 +124,69 @@ function alternarAuto(){
   refrescarTodo(false);
 }
 
-/* ---------- versiones ---------- */
+/* ---------- versiones e historial ----------
+   Como en Lightroom: versiones con nombre que guardas tú y un historial automático de cada cambio de esta sesión. */
+const NOMBRE_CLAVE = (() => {
+  const n = {}; Object.values(PANELES).flat().forEach(c => { n[c.k] = c.nom; });
+  BANDAS.forEach(b => { n['m_' + b.k + '_h'] = 'Tono ' + b.nom.toLowerCase(); n['m_' + b.k + '_s'] = 'Saturación ' + b.nom.toLowerCase(); n['m_' + b.k + '_l'] = 'Luminancia ' + b.nom.toLowerCase(); });
+  ZONAS.forEach(z => { ['h', 's', 'l'].forEach(x => { n['g_' + z.k + '_' + x] = 'Gradación ' + z.nom.toLowerCase(); }); });
+  n.g_mezcla = 'Gradación: mezcla'; n.g_balance = 'Gradación: balance'; n.restringir = 'Restringir recorte';
+  return n;
+})();
+/* Nombre del paso i del historial: qué cambió respecto al anterior */
+function nombrePaso(i){
+  if (!i) return 'Al abrir';
+  const a = JSON.parse(ED.hist[i - 1]), b = JSON.parse(ED.hist[i]), cambios = [];
+  for (const k in DEF) if (a[k] !== b[k]) cambios.push(k);
+  const extra = [['perfil', 'Perfil'], ['curva', 'Curva'], ['geo', 'Recortar'], ['mascaras', 'Máscaras'], ['manchas', 'Quitar'], ['desenfoque', 'Desenfoque de lente'], ['puntos', 'Color puntual'], ['borde', 'Borde']]
+    .filter(([k]) => JSON.stringify(a[k]) !== JSON.stringify(b[k])).map(([, n]) => n);
+  if (cambios.length === 1 && !extra.length) { const k = cambios[0], v = b[k]; return (NOMBRE_CLAVE[k] || k) + ' ' + (Number.isInteger(v) ? (v > 0 ? '+' : '') + v : (v > 0 ? '+' : '') + v.toFixed(2)); }
+  if (!cambios.length && extra.length === 1) return extra[0];
+  return cambios.length + extra.length > 3 ? 'Varios ajustes' : cambios.map(k => NOMBRE_CLAVE[k] || k).concat(extra).join(', ');
+}
 function pintarVersiones(){
   const f = ED.foto, p = $('#p-versiones'); if (!f) return;
   p.innerHTML = pcab('Versiones') +
-    '<form id="f-version" class="fila-version"><input type="text" id="version-nombre" maxlength="40" placeholder="Versión ' + (f.versiones.length + 1) + '" autocomplete="off"><button class="btn primario" type="submit">Guardar</button></form>' +
-    '<div class="sub">Guardadas</div>' + (f.versiones.length ? '<div class="grupo">' + f.versiones.map((v, i) =>
-      '<div><button data-ver="' + i + '" style="flex:1;text-align:left;min-height:46px">' + esc(v.nombre) + ' <small>· ' + new Date(v.fecha).toLocaleDateString('es-CO', { day:'numeric', month:'short' }) + '</small></button>' +
-      '<button class="x" data-ver-borrar="' + i + '" aria-label="Eliminar versión">' + ICO.cerrar + '</button></div>').join('') + '</div>' : '<p class="nota">Guarda distintas ediciones de la misma foto y cambia entre ellas cuando quieras.</p>') +
-    '<div class="sub">Automáticas</div><div class="grupo"><button data-ver-inicial><span>Como estaba al abrir</span></button><button data-ver-original><span>Original, sin ajustes</span></button></div>';
-  $('#f-version').onsubmit = async e => {
+    '<div class="segmento" style="margin:2px 0 8px"><button data-vv="nombradas" aria-selected="' + (vistaVersiones === 'nombradas') + '">Con nombre</button><button data-vv="historial" aria-selected="' + (vistaVersiones === 'historial') + '">Historial</button></div>' +
+    (vistaVersiones === 'historial'
+      ? '<div class="grupo">' + ED.hist.map((_, i) => i).reverse().slice(0, 60).map(i => '<button data-paso="' + i + '"' + (i === ED.hi ? ' class="actual"' : '') + '><span>' + esc(nombrePaso(i)) + '</span>' + (i === ED.hi ? '<small>Actual</small>' : '') + '</button>').join('') + '</div><p class="nota">Toca un paso para volver a él. El historial dura mientras la foto está abierta.</p>'
+      : '<form id="f-version" class="fila-version"><input type="text" id="version-nombre" maxlength="40" placeholder="Versión ' + (f.versiones.length + 1) + '" autocomplete="off"><button class="btn primario" type="submit">Guardar</button></form>' +
+        '<div class="sub">Guardadas</div>' + (f.versiones.length ? '<div class="grupo">' + f.versiones.map((v, i) =>
+          '<div><button data-ver="' + i + '" style="flex:1;text-align:left;min-height:46px">' + esc(v.nombre) + ' <small>· ' + new Date(v.fecha).toLocaleDateString('es-CO', { day:'numeric', month:'short' }) + '</small></button>' +
+          '<button class="x" data-ver-borrar="' + i + '" aria-label="Eliminar versión">' + ICO.cerrar + '</button></div>').join('') + '</div>' : '<p class="nota">Guarda distintas ediciones de la misma foto y cambia entre ellas cuando quieras.</p>') +
+        '<div class="sub">Automáticas</div><div class="grupo"><button data-ver-inicial><span>Como estaba al abrir</span></button><button data-ver-original><span>Original, sin ajustes</span></button></div>');
+  const fv = $('#f-version');
+  if (fv) fv.onsubmit = async e => {
     e.preventDefault();
     f.versiones.unshift({ nombre:$('#version-nombre').value.trim() || 'Versión ' + (f.versiones.length + 1), fecha:Date.now(), ajustes:clonar(ED.a) });
     await DB.guardar(f); toast('Versión guardada'); pintarVersiones(); sincronizarPaneles();
   };
   p.onclick = async e => {
-    const v = e.target.closest('[data-ver]'), d = e.target.closest('[data-ver-borrar]');
-    if (d) { f.versiones.splice(+d.dataset.verBorrar, 1); await DB.guardar(f); pintarVersiones(); }
+    const v = e.target.closest('[data-ver]'), d = e.target.closest('[data-ver-borrar]'), vv = e.target.closest('[data-vv]'), paso = e.target.closest('[data-paso]');
+    if (vv) { vistaVersiones = vv.dataset.vv; pintarVersiones(); }
+    else if (paso) { ED.hi = +paso.dataset.paso; restaurar(ED.hist[ED.hi]); pintarVersiones(); }
+    else if (d) { f.versiones.splice(+d.dataset.verBorrar, 1); await DB.guardar(f); pintarVersiones(); }
     else if (v) { reemplazarAjustes(f.versiones[+v.dataset.ver].ajustes); toast('Versión aplicada'); }
     else if (e.target.closest('[data-ver-inicial]')) { reemplazarAjustes(JSON.parse(ED.inicial)); toast('Volviste a como estaba al abrir'); }
     else if (e.target.closest('[data-ver-original]')) { reemplazarAjustes(ajustesBase()); toast('Foto sin ajustes. Puedes deshacerlo.'); }
+  };
+}
+let vistaVersiones = 'nombradas';
+
+/* Información y calificación (botón i de la barra superior) */
+function hojaInfo(){
+  const f = ED.foto, d = f.exif || {}, fecha = t => t ? new Date(t).toLocaleString('es-CO', { day:'numeric', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' }) : '';
+  const fila = (n, v) => v ? '<div><span>' + n + '</span><small>' + esc(v) + '</small></div>' : '';
+  abrirHoja(cabHoja('Información') +
+    '<div class="estrellas">' + [1, 2, 3, 4, 5].map(n => '<button data-estr="' + n + '" class="' + (f.estrellas >= n ? 'on' : '') + '" aria-label="' + n + ' estrellas">' + ICO.estrella + '</button>').join('') + '</div>' +
+    '<div class="segmento" style="margin-bottom:14px">' + [['elegida', 'Elegida'], ['', 'Sin marca'], ['rechazada', 'Rechazada']].map(([k, n]) => '<button data-marca="' + k + '" aria-selected="' + ((f.marca || '') === k) + '">' + n + '</button>').join('') + '</div>' +
+    '<div class="grupo">' + fila('Nombre', f.nombre) + fila('Tomada', fecha(f.tomada)) + fila('Importada', fecha(f.fecha)) + fila('Tamaño', f.w + ' × ' + f.h + ' px') +
+      fila('Cámara', d.camara) + fila('Objetivo', d.objetivo) + fila('Exposición', [d.velocidad, d.apertura, d.iso].filter(Boolean).join(' · ')) + fila('Distancia focal', d.focal) + '</div>');
+  $('#hoja').onclick = async e => {
+    const s = e.target.closest('[data-estr]'), m = e.target.closest('[data-marca]'); if (!s && !m) return;
+    if (s) f.estrellas = f.estrellas === +s.dataset.estr ? 0 : +s.dataset.estr;
+    if (m) f.marca = m.dataset.marca;
+    await DB.guardar(f); hojaInfo();
   };
 }
 
@@ -147,7 +194,8 @@ function pintarVersiones(){
 function acomodar(){
   if (!ED.fuente) return;
   const g = ED.a.geo, [Wo, Ho] = marcoOrientado(g, ED.fuente.w, ED.fuente.h);
-  const fw = modoRecorte() ? Wo : g.w * Wo, fh = modoRecorte() ? Ho : g.h * Ho;
+  let fw = modoRecorte() ? Wo : g.w * Wo, fh = modoRecorte() ? Ho : g.h * Ho;
+  if (!modoRecorte()) [fw, fh] = conBorde(ED.a, fw, fh); /* el borde agranda la salida */
   const E = $('#escena').getBoundingClientRect(), pad = esComputador() ? 28 : modoRecorte() ? 22 : 10;
   const s = Math.min((E.width - 2 * pad) / fw, (E.height - 2 * pad) / fh), w = fw * s, h = fh * s;
   ED.vista = { x:(E.width - w) / 2, y:(E.height - h) / 2, w, h };
@@ -176,7 +224,12 @@ function zoomEn(z, cx, cy){
 let cadenaCache = { k:'', g:null };
 function cadenaActual(){
   const k = JSON.stringify([ED.a.geo, CLAVES.geometria.map(c => ED.a[c]), modoRecorte(), ED.fuente.w, ED.fuente.h]);
-  if (k !== cadenaCache.k) cadenaCache = { k, g:cadenaGeo(ED.a, ED.fuente.w, ED.fuente.h, modoRecorte() ? RECORTE_TODO : ED.a.geo) };
+  const bk = modoRecorte() ? [0, 0] : (() => { const g = ED.a.geo, [Wo, Ho] = marcoOrientado(g, ED.fuente.w, ED.fuente.h), [W, H] = conBorde(ED.a, g.w * Wo, g.h * Ho); return [(W - g.w * Wo) / 2 / W, (H - g.h * Ho) / 2 / H]; })();
+  if (k + bk !== cadenaCache.k) {
+    /* con borde, la foto ocupa solo el centro de la salida */
+    const c = cadenaGeo(ED.a, ED.fuente.w, ED.fuente.h, modoRecorte() ? RECORTE_TODO : ED.a.geo), [bx, by] = bk;
+    cadenaCache = { k:k + bk, g:{ ida:(u, v) => c.ida((u - bx) / (1 - 2 * bx), (v - by) / (1 - 2 * by)), vuelta:(x, y) => { const [u, v] = c.vuelta(x, y); return [bx + u * (1 - 2 * bx), by + v * (1 - 2 * by)]; } } };
+  }
   return cadenaCache.g;
 }
 const salidaASrc = (u, v) => cadenaActual().ida(u, v);
@@ -189,12 +242,12 @@ function pintar(){
   pinturaPedida = false; if (!ED.fuente) return;
   const pinta = ED.panel === 'mascaras' && ED.a.mascaras[ED.mascara] && ED.a.mascaras[ED.mascara].tipo === 'pincel' && ED.cursor;
   Motor.revelar(ED.fuente, ED.a, { ancho:ED.res.w, alto:ED.res.h, antes:ED.antes, recorte:modoRecorte() ? RECORTE_TODO : null,
-    verMascara:ED.panel === 'mascaras' && (ED.verMascara || pinta) ? ED.mascara : -1,
+    verMascara:ED.panel === 'mascaras' && (ED.verMascara || VISTA_MASCARA.siempre || pinta) ? ED.mascara : -1,
     division:ED.division, avisos:ED.avisos || ED.avisosTemp });
   const W = ED.vista.w, H = ED.vista.h;
   let capa = '';
   if (!ED.antes) {
-    if (modoRecorte()) capa = pintarCapaRecorte(W, H);
+    if (modoRecorte()) capa = vistaRecorte === 'geometria' ? (ED.a.upright === 'guiado' ? pintarCapaGuias(W, H) : pintarCapaReja(W, H)) : pintarCapaRecorte(W, H);
     else if (ED.panel === 'mascaras' || ED.panel === 'desenfoque') capa = pintarCapaMascaras(W, H);
     else if (ED.panel === 'quitar') capa = pintarCapaQuitar(W, H);
     if (ED.division != null && !modoRecorte()) { const x = ED.division * W; capa += '<path class="division" d="M' + x + ' 0V' + H + '"/><circle class="nodo vivo" cx="' + x + '" cy="' + H / 2 + '" r="11" data-division="1"/>'; }
@@ -234,6 +287,7 @@ function tocarFoto(nx, ny){
   const [x, y] = salidaASrc(nx, ny);
   if (ED.modoToque === 'bb') { Object.assign(ED.a, bbDesdeColor(muestraFoto(x, y)), { bbAuto:false }); ED.modoToque = null; cambiar(true); toast('Balance de blancos ajustado'); return true; }
   if (ED.modoToque === 'color') { elegirColorMascara(x, y); return true; }
+  if (ED.modoToque === 'puntual') { elegirColorPuntual(x, y); return true; }
   if (ED.panel === 'quitar') { tocarQuitar(nx, ny); return true; }
   return false;
 }
@@ -254,7 +308,9 @@ function tocarFoto(nx, ny){
       const [nx, ny] = norm(e), p = ED.panel;
       ini = { p:rel(e), t:Date.now(), px:ED.px, py:ED.py };
       if (e.target.closest('[data-division]')) { gesto = 'division'; return; }
+      if (modoRecorte() && vistaRecorte === 'geometria') { if (ED.a.upright === 'guiado') { guiaInicio(nx, ny); gesto = 'guia'; } else gesto = 'nada'; return; }
       if (modoRecorte() && recorteInicio(nx, ny, ED.vista.w, ED.vista.h)) { gesto = 'recorte'; return; }
+      if (ED.modoToque === 'dirigido') { const [x, y] = salidaASrc(nx, ny); dirigidoInicio(x, y); gesto = 'dirigido'; return; }
       const n = (p === 'mascaras' || p === 'desenfoque') && e.target.closest('[data-nodo]');
       if (n) { mascaraInicio(n, nx, ny); gesto = n.dataset.nodo === 'elegir' ? 'nada' : 'mascara'; return; }
       const mq = p === 'quitar' && e.target.closest('[data-mancha]');
@@ -276,6 +332,8 @@ function tocarFoto(nx, ny){
     const [x, y] = rel(e), [nx, ny] = norm(e);
     if (gesto === 'division') { ED.division = clamp(nx, .02, .98); pedirPintura(); return; }
     if (gesto === 'recorte') { recorteMover(nx, ny); pedirPintura(); return; }
+    if (gesto === 'guia') { guiaMover(nx, ny); pedirPintura(); return; }
+    if (gesto === 'dirigido') { dirigidoMover(y - ini.p[1]); return; }
     if (gesto === 'mascara') { mascaraMover(nx, ny); pedirPintura(); return; }
     if (gesto === 'mancha') { quitarMover(nx, ny); pedirPintura(); return; }
     if (gesto === 'pintar') { pincelMover(nx, ny); return; }
@@ -296,6 +354,8 @@ function tocarFoto(nx, ny){
     const [x, y] = rel(e), [nx, ny] = norm(e); PT.delete(e.pointerId); clearTimeout(retener);
     if (gesto === 'division') { gesto = null; return; }
     if (gesto === 'recorte') { gesto = null; cambiar(true); return; }
+    if (gesto === 'guia') { gesto = null; guiaFin(); return; }
+    if (gesto === 'dirigido') { gesto = null; dirigidoFin(); return; }
     if (gesto === 'mascara') { gesto = null; mascaraFin(); return; }
     if (gesto === 'mancha') { gesto = null; quitarFin(); return; }
     if (gesto === 'pintar') { gesto = null; pincelFin(); return; }
@@ -343,13 +403,17 @@ function menuMas(){
   const INFO = ['Nada', 'Histograma', 'Datos de la cámara'];
   abrirHoja(cabHoja(f.nombre) +
     '<div class="grupo">' +
-      '<button data-mas="calificar"><span>Calificar</span><small>' + ([est, marca].filter(Boolean).join(' · ') || 'Sin calificar') + ' ' + ICO.chev + '</small></button>' +
+      '<button data-mas="guardar"><span>Guardar copia en el dispositivo</span></button>' +
+      '<button data-mas="organizar"><span>Organizar en álbumes</span>' + ICO.chev + '</button>' +
+      '<button data-mas="calificar"><span>Información y calificación</span><small>' + ([est, marca].filter(Boolean).join(' · ') || 'Sin calificar') + ' ' + ICO.chev + '</small></button>' +
+    '</div><div class="grupo">' +
       '<button data-mas="division"><span>Antes y después</span><small>' + (ED.division != null ? 'Activo' : 'Apagado') + '</small></button>' +
       '<button data-mas="avisos"><span>Avisos de recorte</span><small>' + (ED.avisos ? 'Activos' : 'Apagados') + '</small></button>' +
       '<button data-mas="info"><span>Información superpuesta</span><small>' + INFO[ED.info] + '</small></button>' +
     '</div><div class="grupo">' +
       '<button data-mas="copiar"><span>Copiar ajustes</span>' + ICO.chev + '</button>' +
       '<button data-mas="pegar"' + (PORTAPAPELES ? '' : ' disabled style="opacity:.4"') + '><span>Pegar ajustes</span></button>' +
+      '<button data-mas="anteriores"' + (ajustesAnteriores() ? '' : ' disabled style="opacity:.4"') + '><span>Aplicar ajustes anteriores</span></button>' +
       '<button data-mas="versiones"><span>Versiones</span><small>' + (f.versiones.length || '') + '</small></button>' +
       '<button data-mas="preset"><span>Crear preset</span></button>' +
     '</div><div class="grupo">' +
@@ -360,7 +424,10 @@ function menuMas(){
   $('#hoja').onclick = async e => {
     const b = e.target.closest('[data-mas]'); if (!b) return;
     const q = b.dataset.mas;
-    if (q === 'calificar') hojaCalificar([f]);
+    if (q === 'calificar') hojaInfo();
+    if (q === 'guardar') hojaExportar();
+    if (q === 'organizar') hojaAlbum([f]);
+    if (q === 'anteriores' && ajustesAnteriores()) { reemplazarAjustes(aplicarGrupos(ED.a, ajustesAnteriores(), GRUPOS_COPIA.filter(g => !g.apagado).map(g => g.k))); cerrarHoja(); toast('Ajustes anteriores aplicados'); }
     if (q === 'division') { ED.division = ED.division == null ? .5 : null; cerrarHoja(); pedirPintura(); toast(ED.division != null ? 'Arrastra la línea para comparar' : 'Antes y después apagado'); }
     if (q === 'avisos') { ED.avisos = !ED.avisos; cerrarHoja(); pedirPintura(); }
     if (q === 'info') { cerrarHoja(); alternarInfo(); }
@@ -406,3 +473,6 @@ function hojaRestablecer(){
     cerrarHoja(); toast('Restablecido');
   };
 }
+
+/* Últimos ajustes que dejaste en otra foto (para "Aplicar ajustes anteriores") */
+function ajustesAnteriores(){ try { return JSON.parse(localStorage.getItem('revelado.anteriores') || 'null'); } catch (_) { return null; } }
