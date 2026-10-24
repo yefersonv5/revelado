@@ -23,12 +23,21 @@ function interpolador(pts){
   };
 }
 
-/* Tabla para el motor: cada canal pasa primero por la curva RGB y luego por la suya */
-function curvaLUT(cv){
+/* Curva paramétrica de Lightroom: altas luces, claros, oscuros y sombras (-100 a 100), cada región
+   es una campana suave centrada en su cuarto del rango */
+function paramFn(par){
+  if (!par.some(v => v)) return x => x;
+  const centros = [.875, .625, .375, .125];
+  return x => clamp(x + par.reduce((s, v, i) => { const d = Math.abs(x - centros[i]) / .25; return s + (d < 1 ? (Math.cos(d * Math.PI) + 1) / 2 : 0) * v / 100 * .22 * Math.sin(Math.PI * x); }, 0), 0, 1);
+}
+
+/* Tabla para el motor: la curva del perfil, la paramétrica, la de puntos RGB y la de cada canal, en ese orden */
+function curvaLUT(cv, perfil = null){
+  const fp = perfil ? interpolador(perfil) : (x => x), fq = paramFn(cv.param || [0, 0, 0, 0]);
   const fm = interpolador(cv.rgb), fr = interpolador(cv.r), fg = interpolador(cv.g), fb = interpolador(cv.b);
   const out = new Uint8Array(256 * 4);
   for (let i = 0; i < 256; i++) {
-    const m = fm(i / 255);
+    const m = fm(fq(fp(i / 255)));
     out[i * 4] = Math.round(fr(m) * 255); out[i * 4 + 1] = Math.round(fg(m) * 255); out[i * 4 + 2] = Math.round(fb(m) * 255); out[i * 4 + 3] = 255;
   }
   return out;
@@ -39,15 +48,27 @@ function curvaLUT(cv){
 const CANALES = [ { k:'rgb', color:'#FFFFFF' }, { k:'r', color:'#FF5A52' }, { k:'g', color:'#3FCB61' }, { k:'b', color:'#4C8DFF' } ];
 let canalCurva = 'rgb';
 
+let modoCurva = 'puntos';
+const PARAM = ['Altas luces', 'Claros', 'Oscuros', 'Sombras'];
 function htmlCurva(){
-  return '<div class="curva-canal" role="radiogroup" aria-label="Canal">' + CANALES.map(c =>
+  return '<div class="segmento" role="tablist" style="margin:4px 0 6px"><button data-modo-curva="param" aria-selected="' + (modoCurva === 'param') + '">Paramétrica</button>' +
+    '<button data-modo-curva="puntos" aria-selected="' + (modoCurva === 'puntos') + '">Puntos</button></div>' +
+    (modoCurva === 'param' ? '<div class="ctls" id="curva-param"></div>' :
+    '<div class="curva-canal" role="radiogroup" aria-label="Canal">' + CANALES.map(c =>
     '<button data-canal="' + c.k + '" style="background:' + c.color + '" aria-label="Canal ' + (c.k === 'rgb' ? 'RGB' : c.k.toUpperCase()) + '"></button>').join('') +
-    '<span class="flex"></span><button class="txt" data-curva-reset style="font-size:15px">Restablecer</button></div>' +
-    '<svg id="curva-svg" viewBox="0 0 256 256"></svg><p class="nota">Toca para agregar un punto. Doble toque o arrástralo afuera para quitarlo.</p>';
+    '<span class="flex"></span><button class="txt" data-curva-reset style="font-size:15px">Restablecer canal</button></div>' +
+    '<svg id="curva-svg" viewBox="0 0 256 256"></svg><p class="nota">Toca para agregar un punto. Doble toque o arrástralo afuera para quitarlo.</p>');
 }
 
 /* Pinta la curva del canal activo. alCambiar(soltó) se llama al mover (false) y al soltar (true). */
 function montarCurva(raiz, leer, alCambiar){
+  /* alCambiar(null) pide volver a pintar la subvista con el otro modo */
+  const modo = e => { const b = e.target.closest('[data-modo-curva]'); if (b && b.dataset.modoCurva !== modoCurva) { modoCurva = b.dataset.modoCurva; alCambiar(null); return true; } };
+  if (modoCurva === 'param') {
+    raiz.onclick = modo;
+    PARAM.forEach((nom, i) => $('#curva-param', raiz).appendChild(deslizador({ k:'param' + i, nom }, () => leer().param[i], (k, v, final) => { leer().param[i] = v; alCambiar(final); })));
+    return;
+  }
   const svg = $('#curva-svg', raiz);
   const pintar = () => {
     const cv = leer(), pts = cv[canalCurva], f = interpolador(pts), col = CANALES.find(c => c.k === canalCurva).color;
@@ -84,6 +105,7 @@ function montarCurva(raiz, leer, alCambiar){
   const soltar = () => { if (arrastra) { arrastra = false; alCambiar(true); } };
   svg.addEventListener('pointerup', soltar); svg.addEventListener('pointercancel', soltar);
   raiz.onclick = e => {
+    if (modo(e)) return;
     const c = e.target.closest('[data-canal]'); if (c) { canalCurva = c.dataset.canal; sel = -1; pintar(); }
     if (e.target.closest('[data-curva-reset]')) { leer()[canalCurva] = [[0, 0], [1, 1]]; sel = -1; pintar(); alCambiar(true); }
   };

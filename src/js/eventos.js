@@ -4,7 +4,12 @@
 /* ---------- biblioteca ---------- */
 $('#f-importar').addEventListener('change', e => { const a = e.target.files; if (a && a.length) importarArchivos(a); e.target.value = ''; });
 $('#b-ejemplo').addEventListener('click', fotoEjemplo);
-$('#filtros').addEventListener('click', e => { const b = e.target.closest('[data-filtro]'); if (b) { BIB.filtro = b.dataset.filtro; pintarBiblioteca(); } });
+$('#filtros').addEventListener('click', e => {
+  if (e.target.closest('[data-album-nuevo]')) return hojaNuevoAlbum();
+  const b = e.target.closest('[data-filtro]'); if (b) { BIB.filtro = b.dataset.filtro; pintarBiblioteca(); }
+});
+$('#b-orden').addEventListener('click', hojaOrden);
+$('#b-album-mas').addEventListener('click', hojaOpcionesAlbum);
 $('#b-seleccionar').addEventListener('click', () => { if (BIB.seleccionando) salirSeleccion(); else { BIB.seleccionando = true; pintarBiblioteca(); } });
 $('#rejilla').addEventListener('click', e => {
   const b = e.target.closest('[data-foto]'); if (!b) return;
@@ -22,19 +27,22 @@ $('#b-volver').addEventListener('click', volverBiblioteca);
 $('#b-deshacer').addEventListener('click', deshacer);
 $('#b-rehacer').addEventListener('click', rehacer);
 $('#b-mas').addEventListener('click', menuMas);
-$('#b-exportar').addEventListener('click', hojaExportar);
+$('#b-exportar').addEventListener('click', () => hojaExportar());
 $('#herramientas').addEventListener('click', e => { const b = e.target.closest('[data-p]'); if (b) elegirPanel(b.dataset.p); });
 document.addEventListener('keydown', e => {
   if ($('#v-editor').hidden || !$('#hoja').hidden || e.target.closest('input')) return;
   const mod = e.metaKey || e.ctrlKey;
   if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? rehacer() : deshacer(); }
   else if (e.key === '\\' && !ED.antes) { ED.antes = true; pedirPintura(); }   /* como en Lightroom: \ muestra el original */
+  else if (e.key.toLowerCase() === 'y' && !mod) { ED.division = ED.division == null ? .5 : null; pedirPintura(); } /* Y: antes y después */
+  else if (e.key.toLowerCase() === 'j' && !mod) { ED.avisos = !ED.avisos; pedirPintura(); }                     /* J: avisos de recorte */
+  else if (e.key.toLowerCase() === 'i' && !mod) alternarInfo();
   else if (e.key === 'ArrowRight' && !e.target.closest('.ctl')) navegar(1);
   else if (e.key === 'ArrowLeft' && !e.target.closest('.ctl')) navegar(-1);
 });
 document.addEventListener('keyup', e => { if (e.key === '\\' && ED.antes) { ED.antes = false; pedirPintura(); } });
-let acomodarT;
-window.addEventListener('resize', () => { clearTimeout(acomodarT); acomodarT = setTimeout(() => { if (!$('#v-editor').hidden) acomodar(); }, 80); });
+/* la foto se reacomoda cada vez que cambia el espacio que le queda (giro del teléfono, panel más alto o más bajo) */
+new ResizeObserver(() => { if (!$('#v-editor').hidden) acomodar(); }).observe($('#escena'));
 /* guarda la edición al salir de la app o cambiar de pestaña */
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden' && ED.foto && ED.sucio) { clearTimeout(guardadoT); ED.foto.ajustes = clonar(ED.a); ED.foto.editada = ajustesEditados(ED.a); DB.guardar(ED.foto); }
@@ -47,12 +55,12 @@ document.addEventListener('visibilitychange', () => {
     $('#vacio').innerHTML = '<b>Este navegador no puede revelar fotos</b><p>Revelado necesita WebGL2. Actualiza iOS o abre la app en Safari o Chrome recientes.</p>';
     return;
   }
-  try { ED.verHisto = localStorage.getItem('revelado.histo') === '1'; } catch (_) {}
-  $('#histo').hidden = !ED.verHisto;
-  construirPaneles(); construirRecorte(); construirMascaras(); construirPresets();
+  if (PORTAPAPELES && !PORTAPAPELES.grupos) PORTAPAPELES = null; /* copias de una versión anterior */
+  construirPaneles(); construirRecorte(); construirMascaras(); construirQuitar(); construirPresets();
   try {
     await DB.abrir();
-    BIB.fotos = await DB.todas(); PRESETS_PROPIOS = (await DB.presets()).sort((a, b) => a.fecha - b.fecha);
+    BIB.fotos = await DB.todas(); BIB.albumes = (await DB.albumes()).sort((a, b) => a.fecha - b.fecha);
+    PRESETS_PROPIOS = (await DB.presets()).sort((a, b) => a.fecha - b.fecha);
   } catch (e) { console.error(e); toast('No se pudo abrir la biblioteca de este dispositivo', 4000); }
   pintarBiblioteca();
 })();

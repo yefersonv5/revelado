@@ -39,12 +39,17 @@ function deslizador(def, obtener, fijar){
   el.addEventListener('pointermove', e => {
     if (e.pointerId !== id) return;
     const dx = e.clientX - x0;
-    if (!arrastra) { if (Math.abs(dx) < 5) return; arrastra = true; el.setPointerCapture(id); el.classList.add('arrastrando'); x0 = e.clientX; return; }
+    if (!arrastra) {
+      if (Math.abs(dx) < 5) return;
+      arrastra = true; el.setPointerCapture(id); el.classList.add('arrastrando'); x0 = e.clientX;
+      if (def.avisos) { ED.avisosTemp = true; pedirPintura(); } /* muestra qué se quema o se pierde mientras arrastras */
+      return;
+    }
     poner(v0 + dx / ancho * (max - min), false);
   });
   const soltar = e => {
     if (e.pointerId !== id) return; id = null;
-    if (arrastra) { arrastra = false; el.classList.remove('arrastrando'); poner(obtener(def.k), true); return; }
+    if (arrastra) { arrastra = false; el.classList.remove('arrastrando'); if (def.avisos) ED.avisosTemp = false; poner(obtener(def.k), true); return; }
     if (e.type !== 'pointerup') return;
     const ahora = Date.now();
     if (ahora - ultimoToque < 320) { ultimoToque = 0; poner(base, true); } else ultimoToque = ahora;

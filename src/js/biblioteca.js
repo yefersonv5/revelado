@@ -1,6 +1,8 @@
-/* Biblioteca: fotos guardadas solo en el dispositivo (IndexedDB) y la vista en rejilla con filtros y selección.
+/* Biblioteca: fotos guardadas solo en el dispositivo (IndexedDB), la vista en rejilla con filtros
+   (editadas, estrellas, marcas y álbumes), orden por fecha de captura o de importación, y la selección
+   múltiple para pegar ajustes, agregar a un álbum, exportar o eliminar.
    Cada foto guarda el original intacto aparte (almacén "originales") y en "fotos" sus datos livianos:
-   ajustes, versiones, favorita y la miniatura ya revelada. */
+   ajustes, versiones, estrellas, marca, álbumes, datos de cámara y la miniatura ya revelada. */
 
 const DB = (() => {
   let db = null;
@@ -8,12 +10,10 @@ const DB = (() => {
   const tx = (almacen, modo = 'readonly') => db.transaction(almacen, modo).objectStore(almacen);
   return {
     async abrir(){
-      const r = indexedDB.open('revelado', 1);
+      const r = indexedDB.open('revelado', 2);
       r.onupgradeneeded = () => {
         const d = r.result;
-        d.createObjectStore('fotos', { keyPath:'id' });
-        d.createObjectStore('originales', { keyPath:'id' });
-        d.createObjectStore('presets', { keyPath:'id' });
+        for (const n of ['fotos', 'originales', 'presets', 'albumes']) if (!d.objectStoreNames.contains(n)) d.createObjectStore(n, { keyPath:'id' });
       };
       db = await pedir(r);
       try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (_) {}
@@ -26,12 +26,16 @@ const DB = (() => {
     presets: () => pedir(tx('presets').getAll()),
     guardarPreset: p => pedir(tx('presets', 'readwrite').put(p)),
     eliminarPreset: id => pedir(tx('presets', 'readwrite').delete(id)),
+    albumes: () => pedir(tx('albumes').getAll()),
+    guardarAlbum: a => pedir(tx('albumes', 'readwrite').put(a)),
+    eliminarAlbum: id => pedir(tx('albumes', 'readwrite').delete(id)),
   };
 })();
 
 /* Estado de la biblioteca en memoria */
-const BIB = { fotos:[], filtro:'todas', seleccionando:false, sel:new Set(), urls:new Map() };
-let PORTAPAPELES = null; /* ajustes copiados para pegar en otras fotos */
+const BIB = { fotos:[], albumes:[], filtro:'todas', orden:'captura', seleccionando:false, sel:new Set(), urls:new Map() };
+try { BIB.orden = localStorage.getItem('revelado.orden') || 'captura'; } catch (_) {}
+let PORTAPAPELES = null; /* ajustes copiados (y qué grupos) para pegar en otras fotos */
 try { PORTAPAPELES = JSON.parse(localStorage.getItem('revelado.copiados') || 'null'); } catch (_) {}
 
 /* Abre un archivo de imagen respetando la orientación de la cámara */
@@ -58,16 +62,17 @@ async function miniatura(foto, imagen = null){
 async function importarArchivos(archivos){
   const lista = [...archivos].filter(a => a.type.startsWith('image/') || /\.(heic|heif|jpe?g|png|webp)$/i.test(a.name));
   if (!lista.length) return toast('Esos archivos no son fotos');
+  const album = BIB.filtro.startsWith('a:') ? BIB.filtro.slice(2) : null; /* importar dentro de un álbum abierto lo agrega ahí */
   let hechas = 0, fallas = 0;
   for (const a of lista) {
     toast('Importando ' + (hechas + 1) + ' de ' + lista.length, 60000);
     try {
-      const img = await decodificar(a), id = uid();
-      const foto = { id, nombre:a.name.replace(/\.[^.]+$/, '') || 'Foto', fecha:Date.now(), tomada:a.lastModified || Date.now(),
-        w:img.width, h:img.height, ajustes:ajustesBase(), versiones:[], fav:false, editada:false, mini:null };
+      const img = await decodificar(a), id = uid(), exif = await leerExif(a);
+      const foto = { id, nombre:a.name.replace(/\.[^.]+$/, '') || 'Foto', fecha:Date.now(), tomada:(exif && exif.fecha) || a.lastModified || Date.now(),
+        w:img.width, h:img.height, exif, ajustes:ajustesBase(), versiones:[], estrellas:0, marca:'', albumes:album ? [album] : [], editada:false, mini:null };
       foto.mini = await miniatura(foto, img);
       await DB.agregarOriginal(id, a); await DB.guardar(foto);
-      BIB.fotos.unshift(foto); hechas++;
+      BIB.fotos.push(foto); hechas++;
     } catch (e) { fallas++; console.error(e); }
   }
   pintarBiblioteca();
@@ -81,23 +86,38 @@ function urlMini(f){
   if (prev) URL.revokeObjectURL(prev.url);
   const url = f.mini ? URL.createObjectURL(f.mini) : ''; BIB.urls.set(f.id, { blob:f.mini, url }); return url;
 }
+const FILTROS = [['todas', 'Todas'], ['editadas', 'Editadas'], ['estrellas', 'Con estrellas'], ['elegidas', 'Elegidas'], ['rechazadas', 'Rechazadas']];
 function fotosVisibles(){
-  const ord = BIB.fotos.slice().sort((a, b) => b.fecha - a.fecha);
-  return BIB.filtro === 'editadas' ? ord.filter(f => f.editada) : BIB.filtro === 'favoritas' ? ord.filter(f => f.fav) : ord;
+  const campo = BIB.orden === 'importacion' ? 'fecha' : 'tomada';
+  const ord = BIB.fotos.slice().sort((a, b) => (b[campo] || 0) - (a[campo] || 0));
+  const f = BIB.filtro;
+  if (f.startsWith('a:')) return ord.filter(x => (x.albumes || []).includes(f.slice(2)));
+  return ord.filter(x => f === 'editadas' ? x.editada : f === 'estrellas' ? x.estrellas > 0 : f === 'elegidas' ? x.marca === 'elegida' : f === 'rechazadas' ? x.marca === 'rechazada' : true);
 }
+const ICO_BANDERA = '<svg viewBox="0 0 24 24"><path d="M5 21V4M5 4h11l-2 4 2 4H5"/></svg>';
 function pintarBiblioteca(){
   const vis = fotosVisibles();
-  $('#rejilla').innerHTML = vis.map(f => '<button class="foto' + (BIB.sel.has(f.id) ? ' sel' : '') + '" data-foto="' + f.id + '" aria-label="' + esc(f.nombre) + (f.fav ? ', favorita' : '') + (f.editada ? ', editada' : '') + '">' +
-    '<img src="' + urlMini(f) + '" alt="" loading="lazy">' + (f.fav ? '<svg class="fav" viewBox="0 0 24 24">' + ICO.estrella.slice(ICO.estrella.indexOf('<path')) : '') +
+  $('#rejilla').innerHTML = vis.map(f => '<button class="foto' + (BIB.sel.has(f.id) ? ' sel' : '') + (f.marca === 'rechazada' ? ' rechazada' : '') + '" data-foto="' + f.id + '" aria-label="' + esc(f.nombre) +
+    (f.estrellas ? ', ' + f.estrellas + ' estrellas' : '') + (f.editada ? ', editada' : '') + '">' +
+    '<img src="' + urlMini(f) + '" alt="" loading="lazy">' +
+    (f.estrellas ? '<span class="estr">' + '★'.repeat(f.estrellas) + '</span>' : '') +
+    (f.marca === 'elegida' ? '<span class="band">' + ICO_BANDERA + '</span>' : '') +
     (f.editada ? '<svg class="ed" viewBox="0 0 24 24">' + ICO.editada.slice(ICO.editada.indexOf('<path')) : '') + '<span class="chk"></span></button>').join('');
   const vacia = !BIB.fotos.length;
-  $('#vacio').hidden = !vacia; $('#filtros').hidden = vacia; $('#b-seleccionar').hidden = vacia;
-  if (!vacia && !vis.length) $('#rejilla').innerHTML = '<p class="ayuda" style="grid-column:1/-1;padding:40px 16px">' + (BIB.filtro === 'editadas' ? 'Aún no has editado ninguna foto.' : 'Marca fotos como favoritas desde el editor o con Seleccionar.') + '</p>';
-  $$('#filtros button').forEach(b => b.setAttribute('aria-selected', b.dataset.filtro === BIB.filtro));
+  $('#vacio').hidden = !vacia; $('#filtros').hidden = vacia; $('#b-seleccionar').hidden = vacia; $('#b-orden').hidden = vacia;
+  $('#filtros').innerHTML = FILTROS.map(([k, n]) => '<button data-filtro="' + k + '" class="' + (BIB.filtro === k ? 'activo' : '') + '">' + n + '</button>').join('') +
+    BIB.albumes.map(a => '<button data-filtro="a:' + a.id + '" class="' + (BIB.filtro === 'a:' + a.id ? 'activo' : '') + '">' + esc(a.nom) + '</button>').join('') +
+    '<button data-album-nuevo aria-label="Nuevo álbum">+ Álbum</button>';
+  const album = BIB.filtro.startsWith('a:') && BIB.albumes.find(a => 'a:' + a.id === BIB.filtro);
+  $('#titulo-bib').textContent = album ? album.nom : 'Biblioteca';
+  $('#b-album-mas').hidden = !album;
+  if (!vacia && !vis.length) $('#rejilla').innerHTML = '<p class="ayuda" style="grid-column:1/-1;padding:40px 16px">' +
+    (album ? 'Este álbum está vacío. Usa Seleccionar en Todas y luego Álbum.' : BIB.filtro === 'editadas' ? 'Aún no has editado ninguna foto.' : 'No hay fotos con este filtro. Califícalas desde el editor (menú de más opciones) o con Seleccionar.') + '</p>';
   $('#v-biblioteca').classList.toggle('seleccionando', BIB.seleccionando);
   $('#b-seleccionar').textContent = BIB.seleccionando ? 'Listo' : 'Seleccionar';
   $('#barra-sel').hidden = !BIB.seleccionando;
   const n = BIB.sel.size;
+  $('#sel-cuenta').textContent = n ? n + (n === 1 ? ' foto' : ' fotos') : 'Elige fotos';
   $$('#barra-sel [data-sel]').forEach(b => { b.disabled = !n || (b.dataset.sel === 'pegar' && !PORTAPAPELES); });
 }
 
@@ -105,11 +125,9 @@ function salirSeleccion(){ BIB.seleccionando = false; BIB.sel.clear(); pintarBib
 
 async function accionSeleccion(accion){
   const ids = [...BIB.sel], fotos = BIB.fotos.filter(f => BIB.sel.has(f.id));
-  if (accion === 'favorita') {
-    const todas = fotos.every(f => f.fav);
-    for (const f of fotos) { f.fav = !todas; await DB.guardar(f); }
-    toast(todas ? 'Quitadas de favoritas' : 'Marcadas como favoritas'); return salirSeleccion();
-  }
+  if (accion === 'calificar') return hojaCalificar(fotos, salirSeleccion);
+  if (accion === 'album') return hojaAlbum(fotos);
+  if (accion === 'exportar') return hojaExportar(fotos);
   if (accion === 'eliminar') {
     const ok = await confirmar(ids.length === 1 ? 'Eliminar foto' : 'Eliminar ' + ids.length + ' fotos', 'Se borran de Revelado con sus ediciones. Las fotos de tu galería no se tocan.', 'peligro');
     if (!ok) return;
@@ -120,16 +138,76 @@ async function accionSeleccion(accion){
     let i = 0;
     for (const f of fotos) {
       toast('Pegando ajustes ' + (++i) + ' de ' + fotos.length, 60000);
-      f.ajustes = pegarAjustes(f.ajustes, PORTAPAPELES); f.editada = ajustesEditados(f.ajustes);
+      f.ajustes = pegarAjustes(f.ajustes); f.editada = ajustesEditados(f.ajustes);
       f.mini = await miniatura(f); await DB.guardar(f);
     }
     toast('Ajustes pegados en ' + fotos.length + (fotos.length === 1 ? ' foto' : ' fotos')); salirSeleccion();
   }
 }
 
-/* Pega los ajustes copiados: todo menos la geometría, que es propia de cada foto */
-function pegarAjustes(destino, copiados){
-  const a = completarAjustes(copiados); a.geo = clonar(destino.geo); return a;
+/* Pega los grupos copiados sobre unos ajustes */
+const pegarAjustes = destino => aplicarGrupos(destino, PORTAPAPELES.a, PORTAPAPELES.grupos);
+
+/* Estrellas y marca (elegida o rechazada) para una o varias fotos */
+function hojaCalificar(fotos, alTerminar = null){
+  const una = fotos.length === 1 ? fotos[0] : null;
+  const pintar = () => {
+    abrirHoja(cabHoja(una ? 'Calificar' : 'Calificar ' + fotos.length + ' fotos') +
+      '<div class="estrellas">' + [1, 2, 3, 4, 5].map(n => '<button data-estr="' + n + '" class="' + (una && una.estrellas >= n ? 'on' : '') + '" aria-label="' + n + ' estrellas">' + ICO.estrella + '</button>').join('') + '</div>' +
+      '<div class="segmento" style="margin-bottom:14px">' + [['elegida', 'Elegida'], ['', 'Sin marca'], ['rechazada', 'Rechazada']].map(([k, n]) =>
+        '<button data-marca="' + k + '" aria-selected="' + (una ? una.marca === k : false) + '">' + n + '</button>').join('') + '</div>' +
+      '<button class="btn bloque" data-cerrar>Listo</button>', alTerminar);
+    $('#hoja').onclick = async e => {
+      const s = e.target.closest('[data-estr]'), m = e.target.closest('[data-marca]'); if (!s && !m) return;
+      for (const f of fotos) {
+        if (s) f.estrellas = una && una.estrellas === +s.dataset.estr ? 0 : +s.dataset.estr;
+        if (m) f.marca = m.dataset.marca;
+        await DB.guardar(f);
+      }
+      if (una) pintar(); else { cerrarHoja(); toast('Calificación aplicada'); }
+    };
+  };
+  pintar();
+}
+
+/* ---------- álbumes ---------- */
+function hojaAlbum(fotos){
+  abrirHoja(cabHoja('Agregar a álbum') + (BIB.albumes.length ? '<div class="grupo">' + BIB.albumes.map(a =>
+    '<button data-album="' + a.id + '"><span>' + esc(a.nom) + '</span><small>' + BIB.fotos.filter(f => (f.albumes || []).includes(a.id)).length + '</small></button>').join('') + '</div>' : '') +
+    '<form id="f-album"><div class="grupo"><input type="text" id="album-nombre" maxlength="40" placeholder="Nuevo álbum" autocomplete="off"></div><button class="btn primario bloque" type="submit">Crear y agregar</button></form>');
+  const agregar = async id => { for (const f of fotos) { f.albumes = [...new Set([...(f.albumes || []), id])]; await DB.guardar(f); } cerrarHoja(); toast('Agregadas al álbum'); salirSeleccion(); };
+  $('#hoja').onclick = e => { const b = e.target.closest('[data-album]'); if (b) agregar(b.dataset.album); };
+  $('#f-album').onsubmit = async e => { e.preventDefault(); const a = await crearAlbum($('#album-nombre').value); if (a) agregar(a.id); };
+}
+async function crearAlbum(nombre){
+  const nom = (nombre || '').trim(); if (!nom) { toast('Escribe un nombre para el álbum'); return null; }
+  const a = { id:uid(), nom, fecha:Date.now() }; await DB.guardarAlbum(a); BIB.albumes.push(a); return a;
+}
+function hojaNuevoAlbum(){
+  abrirHoja(cabHoja('Nuevo álbum') + '<form id="f-album"><div class="grupo"><input type="text" id="album-nombre" maxlength="40" placeholder="Nombre del álbum" autofocus autocomplete="off"></div><button class="btn primario bloque" type="submit">Crear álbum</button></form>');
+  $('#f-album').onsubmit = async e => { e.preventDefault(); const a = await crearAlbum($('#album-nombre').value); if (a) { BIB.filtro = 'a:' + a.id; cerrarHoja(); pintarBiblioteca(); } };
+}
+function hojaOpcionesAlbum(){
+  const id = BIB.filtro.slice(2), a = BIB.albumes.find(x => x.id === id); if (!a) return;
+  abrirHoja(cabHoja(a.nom) + '<form id="f-album"><div class="grupo"><input type="text" id="album-nombre" maxlength="40" value="' + esc(a.nom) + '" autocomplete="off"></div><button class="btn bloque" type="submit">Cambiar nombre</button></form>' +
+    '<div class="grupo" style="margin-top:14px"><button data-album-quitar><span>Sacar fotos seleccionadas</span></button><button class="peligro" data-album-borrar><span>Eliminar álbum (las fotos se quedan)</span></button></div>');
+  $('#f-album').onsubmit = async e => { e.preventDefault(); const n = $('#album-nombre').value.trim(); if (n) { a.nom = n; await DB.guardarAlbum(a); cerrarHoja(); pintarBiblioteca(); } };
+  $('#hoja').onclick = async e => {
+    if (e.target.closest('[data-album-borrar]')) {
+      for (const f of BIB.fotos) if ((f.albumes || []).includes(id)) { f.albumes = f.albumes.filter(x => x !== id); await DB.guardar(f); }
+      await DB.eliminarAlbum(id); BIB.albumes = BIB.albumes.filter(x => x.id !== id); BIB.filtro = 'todas'; cerrarHoja(); pintarBiblioteca(); toast('Álbum eliminado');
+    }
+    if (e.target.closest('[data-album-quitar]')) {
+      if (!BIB.sel.size) { cerrarHoja(); BIB.seleccionando = true; pintarBiblioteca(); return toast('Elige las fotos y vuelve a tocar el álbum'); }
+      for (const f of BIB.fotos.filter(x => BIB.sel.has(x.id))) { f.albumes = (f.albumes || []).filter(x => x !== id); await DB.guardar(f); }
+      cerrarHoja(); salirSeleccion(); toast('Fotos sacadas del álbum');
+    }
+  };
+}
+function hojaOrden(){
+  abrirHoja(cabHoja('Ordenar') + '<div class="grupo">' + [['captura', 'Fecha de captura'], ['importacion', 'Fecha de importación']].map(([k, n]) =>
+    '<button data-orden="' + k + '"><span>' + n + '</span>' + (BIB.orden === k ? '<span style="color:var(--brand)">✓</span>' : '') + '</button>').join('') + '</div>');
+  $('#hoja').onclick = e => { const b = e.target.closest('[data-orden]'); if (!b) return; BIB.orden = b.dataset.orden; try { localStorage.setItem('revelado.orden', BIB.orden); } catch (_) {} cerrarHoja(); pintarBiblioteca(); };
 }
 
 /* ---------- foto de ejemplo: atardecer sobre montañas y un lago, dibujado en el momento ---------- */

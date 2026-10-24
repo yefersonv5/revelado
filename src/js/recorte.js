@@ -11,7 +11,7 @@ function construirRecorte(){
     '<div class="chips" style="justify-content:center;gap:10px;padding-top:10px">' +
     '<button data-girar>Girar 90°</button><button data-voltear="flipH">Voltear horizontal</button><button data-voltear="flipV">Voltear vertical</button></div>';
   $('.ctls', p).appendChild(deslizador({ k:'angulo', nom:'Enderezar', min:-45, max:45, paso:.1, base:0 }, () => ED.a.geo.angulo,
-    (k, v, final) => { ED.a.geo.angulo = v; encajarRecorte(ED.a.geo, ED.fuente.w, ED.fuente.h); cambiar(final); }));
+    (k, v, final) => { ED.a.geo.angulo = v; encajarRecorte(ED.a, ED.fuente.w, ED.fuente.h); cambiar(final); }));
   p.addEventListener('click', e => {
     const g = ED.a.geo, b = e.target.closest('button'); if (!b) return;
     if (b.dataset.asp) { g.aspecto = b.dataset.asp; aplicarProporcion(); }
@@ -23,7 +23,7 @@ function construirRecorte(){
     else if (b.dataset.voltear) { g[b.dataset.voltear] = !g[b.dataset.voltear]; if (b.dataset.voltear === 'flipH') g.x = 1 - g.x - g.w; else g.y = 1 - g.y - g.h; g.angulo = -g.angulo; }
     else if (b.dataset.resetRecorte !== undefined) Object.assign(g, clonar(GEO_DEF));
     else return;
-    encajarRecorte(g, ED.fuente.w, ED.fuente.h); cambiar(true); acomodar(); sincronizarRecorte();
+    encajarRecorte(ED.a, ED.fuente.w, ED.fuente.h); cambiar(true); acomodar(); sincronizarRecorte();
   });
 }
 function sincronizarRecorte(){ $$('#proporciones button').forEach(b => b.classList.toggle('activo', b.dataset.asp === ED.a.geo.aspecto)); }
@@ -65,13 +65,21 @@ function recorteInicio(nx, ny, W, H){
   if (dentroY) { if (bordes.l) modo += 'l'; else if (bordes.r) modo += 'r'; }
   if (dentroX) { if (bordes.t) modo += 't'; else if (bordes.b) modo += 'b'; }
   if (!modo && px > g.x * W && px < (g.x + g.w) * W && py > g.y * H && py < (g.y + g.h) * H) modo = 'mover';
-  if (!modo) return false;
-  RC.modo = modo; RC.ini = { x:g.x, y:g.y, w:g.w, h:g.h }; RC.p0 = [nx, ny];
+  /* fuera del recorte: arrastrar en círculo endereza la foto, como en Lightroom */
+  if (!modo) modo = 'girar';
+  RC.modo = modo; RC.ini = { x:g.x, y:g.y, w:g.w, h:g.h, ang:g.angulo }; RC.p0 = [nx, ny];
+  RC.c = [(g.x + g.w / 2) * W, (g.y + g.h / 2) * H]; RC.a0 = Math.atan2(py - RC.c[1], px - RC.c[0]); RC.W = W; RC.H = H;
   return true;
 }
 function recorteMover(nx, ny){
   const g = ED.a.geo, i = RC.ini, dx = nx - RC.p0[0], dy = ny - RC.p0[1], m = RC.modo, min = .06;
   const antes = { x:g.x, y:g.y, w:g.w, h:g.h };
+  if (m === 'girar') {
+    const a1 = Math.atan2(ny * RC.H - RC.c[1], nx * RC.W - RC.c[0]);
+    let d = (a1 - RC.a0) * 180 / Math.PI; if (d > 180) d -= 360; if (d < -180) d += 360;
+    g.angulo = +clamp(i.ang - d, -45, 45).toFixed(1); Object.assign(g, { x:i.x, y:i.y, w:i.w, h:i.h });
+    encajarRecorte(ED.a, ED.fuente.w, ED.fuente.h); $$('#p-recortar .ctl').forEach(c => c.sync()); return;
+  }
   if (m === 'mover') { g.x = clamp(i.x + dx, 0, 1 - i.w); g.y = clamp(i.y + dy, 0, 1 - i.h); }
   else {
     let x0 = i.x, y0 = i.y, x1 = i.x + i.w, y1 = i.y + i.h;
@@ -92,5 +100,5 @@ function recorteMover(nx, ny){
     }
     Object.assign(g, { x:x0, y:y0, w:x1 - x0, h:y1 - y0 });
   }
-  if (!recorteValido(g, ED.fuente.w, ED.fuente.h)) Object.assign(g, antes);
+  if (!recorteValido(ED.a, ED.fuente.w, ED.fuente.h)) Object.assign(g, antes);
 }

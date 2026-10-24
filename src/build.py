@@ -16,11 +16,13 @@ ORDEN = [
     'ajustes-def.js',        # ajustes, valores por defecto y presets incluidos
     'curva.js',              # curva de tonos: interpolación y editor
     'motor.js',              # motor de revelado en WebGL2
+    'exif.js',               # datos de la cámara de cada foto
     'biblioteca.js',         # fotos en el dispositivo (IndexedDB) y vista de biblioteca
     'deslizador.js',         # deslizador táctil al estilo Lightroom
-    'paneles.js',            # paneles de Luz, Color, Efectos y Detalle
+    'paneles.js',            # paneles de Luz, Color, Efectos, Detalle, Óptica y Geometría
     'recorte.js',            # recortar, enderezar, girar y voltear
-    'mascaras.js',           # máscaras lineales y radiales
+    'mascaras.js',           # máscaras y desenfoque de lente
+    'quitar.js',             # herramienta Quitar (pincel corrector)
     'presets.js',            # presets incluidos y propios
     'editor.js',             # editor: vista, historial y gestos
     'exportar.js',           # exportar y compartir
