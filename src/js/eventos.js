@@ -24,7 +24,7 @@ document.addEventListener('dragover', e => { if (!$('#v-biblioteca').hidden) e.p
 document.addEventListener('drop', e => { if ($('#v-biblioteca').hidden) return; e.preventDefault(); if (e.dataTransfer.files.length) importarArchivos(e.dataTransfer.files); });
 
 /* ---------- editor ---------- */
-$('#b-volver').addEventListener('click', volverBiblioteca);
+$('#b-volver').addEventListener('click', () => volverBiblioteca());
 $('#b-deshacer').addEventListener('click', deshacer);
 $('#b-rehacer').addEventListener('click', rehacer);
 $('#b-mas').addEventListener('click', menuMas);

@@ -28,6 +28,7 @@ ORDEN = [
     'rapidas.js',            # acciones rápidas
     'editor.js',             # editor: vista, historial y gestos
     'exportar.js',           # exportar y compartir
+    'gestos.js',             # gestos del celular: sin zoom, atrás del sistema y borde izquierdo
     'eventos.js',            # navegación y arranque: siempre al final
 ]
 
