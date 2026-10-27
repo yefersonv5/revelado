@@ -26,6 +26,7 @@ ORDEN = [
     'presets.js',            # presets incluidos y propios
     'editor.js',             # editor: vista, historial y gestos
     'exportar.js',           # exportar y compartir
+    'gestos.js',             # gestos del celular: sin zoom, atrás del sistema y borde izquierdo
     'eventos.js',            # navegación y arranque: siempre al final
 ]
 

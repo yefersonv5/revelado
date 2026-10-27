@@ -21,7 +21,7 @@ try { ED.info = +localStorage.getItem('revelado.info') || 0; } catch (_) {}
 /* ---------- abrir y cerrar ---------- */
 async function abrirEditor(id){
   const foto = BIB.fotos.find(f => f.id === id); if (!foto) return;
-  if (ED.foto) await soltarFoto();
+  if (ED.foto) await soltarFoto(); else navPush('editor'); /* el gesto de atrás del sistema vuelve a la biblioteca */
   $('#v-biblioteca').hidden = true; $('#v-editor').hidden = false;
   try {
     const img = await decodificar(await DB.original(id));
@@ -47,7 +47,10 @@ async function soltarFoto(){
   ED.fuente.liberar(); ED.fuenteMini.liberar(); if (ED.img.close) ED.img.close();
   ED.foto = ED.fuente = ED.fuenteMini = ED.img = ED.srcPx = null;
 }
-async function volverBiblioteca(){
+/* desdeHistorial: el sistema ya retrocedió (gesto de atrás); si no, se retrocede aquí para no dejar pasos colgando */
+async function volverBiblioteca(desdeHistorial = false){
+  if ($('#v-editor').hidden) return;
+  if (!desdeHistorial) navAtras();
   await soltarFoto(); cerrarHoja();
   $('#v-editor').hidden = true; $('#v-biblioteca').hidden = false; pintarBiblioteca();
 }
@@ -108,6 +111,7 @@ function elegirPanel(p){
   const salia = ED.panel; ED.panel = p;
   if (ED.modoToque === 'color' && p !== 'mascaras') ED.modoToque = null;
   $$('#herramientas button').forEach(b => b.setAttribute('aria-selected', b.dataset.p === p));
+  const tb = $('#herramientas [data-p="' + p + '"]'); if (tb) tb.scrollIntoView({ block:'nearest', inline:'nearest', behavior:'smooth' });
   $$('.pane').forEach(el => { el.hidden = el.id !== 'p-' + p; });
   pintarPanelActual();
   if (p === 'recortar' || salia === 'recortar') { ED.zoom = 1; ED.px = ED.py = 0; acomodar(); }
@@ -253,6 +257,7 @@ function tocarFoto(nx, ny){
     if (PT.size === 1) {
       const [nx, ny] = norm(e), p = ED.panel;
       ini = { p:rel(e), t:Date.now(), px:ED.px, py:ED.py };
+      if (e.clientX < 24) { gesto = 'nada'; return; } /* el borde izquierdo es del gesto de atrás */
       if (e.target.closest('[data-division]')) { gesto = 'division'; return; }
       if (modoRecorte() && recorteInicio(nx, ny, ED.vista.w, ED.vista.h)) { gesto = 'recorte'; return; }
       const n = (p === 'mascaras' || p === 'desenfoque') && e.target.closest('[data-nodo]');
@@ -312,7 +317,7 @@ function tocarFoto(nx, ny){
     if (gesto === 'barrido') {
       const dx = x - ini.p[0], dy = y - ini.p[1];
       aplicarTransformacion();
-      if (Math.abs(dx) > 70 && Math.abs(dx) > Math.abs(dy) * 1.5) { if (ini.p[0] < 28 && dx > 0) volverBiblioteca(); else navegar(dx < 0 ? 1 : -1); }
+      if (Math.abs(dx) > 70 && Math.abs(dx) > Math.abs(dy) * 1.5) navegar(dx < 0 ? 1 : -1);
     }
     if (gesto === 'pellizco') {
       if (dosDedos && !dosDedos.movio && Date.now() - dosDedos.t < 350) { dosDedos = null; gesto = PT.size ? 'nada' : null; alternarInfo(); return; }
@@ -372,7 +377,7 @@ function menuMas(){
     if (q === 'eliminar') {
       cerrarHoja();
       if (!(await confirmar('Eliminar foto', 'Se borra de Revelado con sus ediciones. La foto de tu galería no se toca.', 'peligro'))) return;
-      const id = f.id; ED.sucio = false; await soltarFoto(); await DB.eliminar(id); BIB.fotos = BIB.fotos.filter(x => x.id !== id);
+      const id = f.id; ED.sucio = false; navAtras(); await soltarFoto(); await DB.eliminar(id); BIB.fotos = BIB.fotos.filter(x => x.id !== id);
       $('#v-editor').hidden = true; $('#v-biblioteca').hidden = false; pintarBiblioteca(); toast('Foto eliminada');
     }
   };

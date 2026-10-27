@@ -53,13 +53,15 @@
 }
 
 /* ---------- 2. Base ---------- */
-html{height:100%;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);background:var(--bg)}
+html{height:100%;height:100dvh;box-sizing:border-box;touch-action:manipulation;text-size-adjust:100%;-webkit-text-size-adjust:100%;overscroll-behavior:none;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);background:var(--bg)}
 *,*::before,*::after{box-sizing:inherit}
-body{height:100%;margin:0;background:var(--bg);color:var(--ink);font:400 17px/1.35 var(--font);overflow:hidden;
+body{height:100%;margin:0;overscroll-behavior:none;background:var(--bg);color:var(--ink);font:400 17px/1.35 var(--font);overflow:hidden;
   -webkit-font-smoothing:antialiased;-webkit-tap-highlight-color:transparent;-webkit-text-size-adjust:100%;
   user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
 [hidden]{display:none!important}
 button,label,input{font:inherit;color:inherit}
+/* iOS acerca la página al escribir en campos de menos de 16 px: nunca más chicos en el celular */
+@media (pointer:coarse){input,select,textarea{font-size:max(16px,1em)}}
 button{background:none;border:0;padding:0;cursor:pointer}
 button:disabled{cursor:default}
 :focus-visible{outline:2px solid var(--brand);outline-offset:2px;border-radius:8px}
@@ -132,7 +134,7 @@ svg .lleno{fill:currentColor}
   border-top:.5px solid var(--line-2);padding:0 var(--gutter-r) 0 var(--gutter)}
 
 /* ---------- 5. Editor ---------- */
-#v-editor{background:#0B0B0C}
+#v-editor{background:#0B0B0C;will-change:transform}
 #escena{position:relative;min-height:0;overflow:hidden;touch-action:none;cursor:grab}
 #marco{position:absolute;left:0;top:0;transform-origin:0 0;will-change:transform}
 #lienzo{display:block;width:100%;height:100%}
@@ -158,7 +160,8 @@ svg .lleno{fill:currentColor}
 #herramientas{display:flex;justify-content:space-between;overflow-x:auto;scrollbar-width:none;border-top:.5px solid var(--line);
   padding:2px max(4px,env(safe-area-inset-right,0px)) 2px max(4px,env(safe-area-inset-left,0px))}
 #herramientas::-webkit-scrollbar{display:none}
-#herramientas button{flex:0 0 60px;display:flex;flex-direction:column;align-items:center;gap:2px;padding:6px 2px 3px;min-height:52px;
+/* en el celular se ven seis herramientas y media: la que queda cortada indica que hay más deslizando */
+#herramientas button{flex:0 0 calc((100vw - 8px) / 6.5);min-width:52px;display:flex;flex-direction:column;align-items:center;gap:2px;padding:6px 2px 3px;min-height:52px;
   color:var(--muted);font-size:10px;font-weight:500}
 #herramientas svg{width:24px;height:24px;stroke-width:1.5}
 #herramientas button[aria-selected="true"]{color:var(--ink)}
@@ -301,6 +304,22 @@ svg .lleno{fill:currentColor}
   .grab{display:none}
   .vista-exp{max-height:min(40vh,360px)}
 }
+/* celular acostado: la foto a la izquierda y los paneles a la derecha, como en Lightroom */
+@media (max-height:500px) and (orientation:landscape) and (max-width:1023px){
+  #v-editor{grid-template-columns:minmax(0,1fr) min(46vw,340px);grid-template-rows:auto minmax(0,1fr)}
+  #v-editor > .barra{grid-column:1/-1}
+  #lateral{grid-row:2;grid-column:2;flex-direction:column-reverse;border-top:0;border-left:.5px solid var(--line-2);padding-right:env(safe-area-inset-right,0px)}
+  #panel{flex:1;overflow:hidden;display:flex;flex-direction:column}
+  .pane{max-height:none;flex:1}
+  #herramientas{border-top:0;border-bottom:.5px solid var(--line)}
+  #herramientas{flex-wrap:wrap;overflow:visible}
+  #herramientas button{flex:0 0 calc(100% / 7);min-width:0;min-height:40px;padding:3px 0 1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:9.5px}
+  #escena{padding-left:env(safe-area-inset-left,0px)}
+  #rejilla{grid-template-columns:repeat(auto-fill,minmax(120px,1fr))}
+  #rejilla{padding:0 env(safe-area-inset-right,0px) 0 env(safe-area-inset-left,0px)}
+  .barra-inf{padding-bottom:0}
+  #hoja{max-height:94vh}
+}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 
 </style>
@@ -406,7 +425,7 @@ svg .lleno{fill:currentColor}
 <div id="aviso" role="status" hidden></div>
 
 <script>
-const BUILD = '20261024051835';
+const BUILD = '20261027010128';
 /* Núcleo: utilidades pequeñas, aviso tipo iOS, hojas que suben desde abajo y el gesto de arrastrarlas para cerrar. */
 
 const $ = (s, el = document) => el.querySelector(s);
@@ -2513,7 +2532,7 @@ try { ED.info = +localStorage.getItem('revelado.info') || 0; } catch (_) {}
 /* ---------- abrir y cerrar ---------- */
 async function abrirEditor(id){
   const foto = BIB.fotos.find(f => f.id === id); if (!foto) return;
-  if (ED.foto) await soltarFoto();
+  if (ED.foto) await soltarFoto(); else navPush('editor'); /* el gesto de atrás del sistema vuelve a la biblioteca */
   $('#v-biblioteca').hidden = true; $('#v-editor').hidden = false;
   try {
     const img = await decodificar(await DB.original(id));
@@ -2539,7 +2558,10 @@ async function soltarFoto(){
   ED.fuente.liberar(); ED.fuenteMini.liberar(); if (ED.img.close) ED.img.close();
   ED.foto = ED.fuente = ED.fuenteMini = ED.img = ED.srcPx = null;
 }
-async function volverBiblioteca(){
+/* desdeHistorial: el sistema ya retrocedió (gesto de atrás); si no, se retrocede aquí para no dejar pasos colgando */
+async function volverBiblioteca(desdeHistorial = false){
+  if ($('#v-editor').hidden) return;
+  if (!desdeHistorial) navAtras();
   await soltarFoto(); cerrarHoja();
   $('#v-editor').hidden = true; $('#v-biblioteca').hidden = false; pintarBiblioteca();
 }
@@ -2600,6 +2622,7 @@ function elegirPanel(p){
   const salia = ED.panel; ED.panel = p;
   if (ED.modoToque === 'color' && p !== 'mascaras') ED.modoToque = null;
   $$('#herramientas button').forEach(b => b.setAttribute('aria-selected', b.dataset.p === p));
+  const tb = $('#herramientas [data-p="' + p + '"]'); if (tb) tb.scrollIntoView({ block:'nearest', inline:'nearest', behavior:'smooth' });
   $$('.pane').forEach(el => { el.hidden = el.id !== 'p-' + p; });
   pintarPanelActual();
   if (p === 'recortar' || salia === 'recortar') { ED.zoom = 1; ED.px = ED.py = 0; acomodar(); }
@@ -2745,6 +2768,7 @@ function tocarFoto(nx, ny){
     if (PT.size === 1) {
       const [nx, ny] = norm(e), p = ED.panel;
       ini = { p:rel(e), t:Date.now(), px:ED.px, py:ED.py };
+      if (e.clientX < 24) { gesto = 'nada'; return; } /* el borde izquierdo es del gesto de atrás */
       if (e.target.closest('[data-division]')) { gesto = 'division'; return; }
       if (modoRecorte() && recorteInicio(nx, ny, ED.vista.w, ED.vista.h)) { gesto = 'recorte'; return; }
       const n = (p === 'mascaras' || p === 'desenfoque') && e.target.closest('[data-nodo]');
@@ -2804,7 +2828,7 @@ function tocarFoto(nx, ny){
     if (gesto === 'barrido') {
       const dx = x - ini.p[0], dy = y - ini.p[1];
       aplicarTransformacion();
-      if (Math.abs(dx) > 70 && Math.abs(dx) > Math.abs(dy) * 1.5) { if (ini.p[0] < 28 && dx > 0) volverBiblioteca(); else navegar(dx < 0 ? 1 : -1); }
+      if (Math.abs(dx) > 70 && Math.abs(dx) > Math.abs(dy) * 1.5) navegar(dx < 0 ? 1 : -1);
     }
     if (gesto === 'pellizco') {
       if (dosDedos && !dosDedos.movio && Date.now() - dosDedos.t < 350) { dosDedos = null; gesto = PT.size ? 'nada' : null; alternarInfo(); return; }
@@ -2864,7 +2888,7 @@ function menuMas(){
     if (q === 'eliminar') {
       cerrarHoja();
       if (!(await confirmar('Eliminar foto', 'Se borra de Revelado con sus ediciones. La foto de tu galería no se toca.', 'peligro'))) return;
-      const id = f.id; ED.sucio = false; await soltarFoto(); await DB.eliminar(id); BIB.fotos = BIB.fotos.filter(x => x.id !== id);
+      const id = f.id; ED.sucio = false; navAtras(); await soltarFoto(); await DB.eliminar(id); BIB.fotos = BIB.fotos.filter(x => x.id !== id);
       $('#v-editor').hidden = true; $('#v-biblioteca').hidden = false; pintarBiblioteca(); toast('Foto eliminada');
     }
   };
@@ -3025,6 +3049,57 @@ async function guardarArchivo(archivo){
   } catch (_) { return false; }
 }
 
+/* Gestos del celular, con los mismos estándares de Caudal:
+   - sin zoom accidental de la página (pellizco y doble toque); el pellizco solo acerca la foto en el editor
+   - el gesto de atrás del sistema (o el botón atrás del navegador) cierra la hoja abierta o vuelve a la biblioteca
+   - en la app instalada, deslizar desde el borde izquierdo vuelve a la biblioteca, porque iOS no trae ese gesto */
+
+const esInstalada = () => navigator.standalone === true || (window.matchMedia && matchMedia('(display-mode: standalone)').matches);
+
+/* ---------- sin zoom de la página ---------- */
+['gesturestart', 'gesturechange', 'gestureend'].forEach(ev => document.addEventListener(ev, e => e.preventDefault(), { passive:false }));
+document.addEventListener('touchmove', e => { if (e.touches && e.touches.length > 1 && !e.target.closest('#escena')) e.preventDefault(); }, { passive:false });
+
+/* ---------- historial: atrás del sistema ---------- */
+const NAVH = { depth:0, skip:0 };
+function navPush(s){ if (esComputador()) return; try { history.pushState({ rev:s }, ''); NAVH.depth++; } catch (_) {} }
+/* Vuelve en el historial si la app había empujado un paso; si no, no hace nada (y devuelve false) */
+function navAtras(){ if (NAVH.depth < 1) return false; NAVH.skip++; NAVH.depth--; history.back(); return true; }
+window.addEventListener('popstate', () => {
+  if (NAVH.skip) { NAVH.skip--; return; }
+  if (NAVH.depth > 0) NAVH.depth--;
+  if (!$('#hoja').hidden) { cerrarHoja(); navPush('hoja'); return; } /* con una hoja abierta, el gesto solo la cierra */
+  if (!$('#v-editor').hidden) volverBiblioteca(true);
+});
+
+/* ---------- deslizar desde el borde izquierdo (app instalada) ---------- */
+(() => {
+  if (!esInstalada()) return;
+  let x0 = null, y0 = 0, dx = 0, on = false, t0 = 0;
+  const vista = () => $('#v-editor');
+  document.addEventListener('touchstart', e => {
+    x0 = null;
+    if (esComputador() || $('#v-editor').hidden || !$('#hoja').hidden || e.touches.length > 1) return;
+    const t = e.touches[0]; if (t.clientX > 24) return;
+    x0 = t.clientX; y0 = t.clientY; dx = 0; on = false; t0 = Date.now();
+  }, { passive:true });
+  document.addEventListener('touchmove', e => {
+    if (x0 === null) return; const t = e.touches[0]; dx = t.clientX - x0; const dy = t.clientY - y0;
+    if (!on) { if (Math.abs(dy) > 12 && Math.abs(dy) > dx) { x0 = null; return; } if (dx > 10) { on = true; vista().style.transition = 'none'; } else return; }
+    e.preventDefault(); vista().style.transform = 'translateX(' + Math.max(0, dx) + 'px)';
+  }, { passive:false });
+  const fin = () => {
+    if (x0 === null) return; x0 = null; if (!on) return; on = false;
+    const v = vista(), vel = dx / Math.max(1, Date.now() - t0);
+    if (dx > window.innerWidth * .3 || (vel > .45 && dx > 40)) {
+      v.style.transition = 'transform .18s ease-out'; v.style.transform = 'translateX(100%)';
+      setTimeout(() => { v.style.transition = 'none'; v.style.transform = ''; volverBiblioteca(); requestAnimationFrame(() => { v.style.transition = ''; }); }, 180);
+    } else { v.style.transition = 'transform .2s ease-out'; v.style.transform = ''; setTimeout(() => { v.style.transition = ''; }, 220); }
+  };
+  document.addEventListener('touchend', fin, { passive:true });
+  document.addEventListener('touchcancel', fin, { passive:true });
+})();
+
 /* Eventos generales y arranque: botones de la biblioteca y del editor, pestañas, cambios de tamaño,
    guardado al salir de la app, instalación sin conexión y recarga automática con cada versión nueva. */
 
@@ -3050,7 +3125,7 @@ document.addEventListener('dragover', e => { if (!$('#v-biblioteca').hidden) e.p
 document.addEventListener('drop', e => { if ($('#v-biblioteca').hidden) return; e.preventDefault(); if (e.dataTransfer.files.length) importarArchivos(e.dataTransfer.files); });
 
 /* ---------- editor ---------- */
-$('#b-volver').addEventListener('click', volverBiblioteca);
+$('#b-volver').addEventListener('click', () => volverBiblioteca());
 $('#b-deshacer').addEventListener('click', deshacer);
 $('#b-rehacer').addEventListener('click', rehacer);
 $('#b-mas').addEventListener('click', menuMas);
